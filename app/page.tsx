@@ -1,369 +1,1068 @@
-"use client";
+"use client"
 
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
-import { useTheme } from "next-themes";
-import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/sidebar";
-import { AppSidebar } from "@/components/app-sidebar";
-import { Copy, EyeOff, PlayCircle, Terminal, ChevronDown, Sun, Moon, Check, RefreshCw, Eye, Database, KeyRound, Crown } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { onAuthStateChanged } from "firebase/auth";
-import { auth } from "@/lib/firebase";
-import { createApiKey } from "@/lib/supabase";
+import Link from "next/link"
+import { useEffect, useMemo, useState } from "react"
+import { useRouter } from "next/navigation"
+import { useTheme } from "next-themes"
+import { onAuthStateChanged, type User } from "firebase/auth"
+import {
+  BadgeDollarSign,
+  BarChart2,
+  Boxes,
+  ChevronRight,
+  Clock,
+  CreditCard,
+  Database,
+  Gauge,
+  KeyRound,
+  Layers3,
+  List,
+  Moon,
+  RefreshCw,
+  Settings,
+  ShieldCheck,
+  Sparkles,
+  Sun,
+  Target,
+  Unplug,
+  Zap,
+} from "lucide-react"
 
-function ThemeToggle() {
-  const { theme, setTheme } = useTheme();
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
-  if (!mounted) return null;
-  return (
-    <Button
-      variant="ghost"
-      size="icon"
-      className="h-8 w-8 text-muted-foreground hover:text-foreground"
-      onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-    >
-      {theme === "dark" ? <Sun className="size-4" /> : <Moon className="size-4" />}
-    </Button>
-  );
+import { AppSidebar } from "@/components/app-sidebar"
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from "@/components/ui/breadcrumb"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import { Progress } from "@/components/ui/progress"
+import { Separator } from "@/components/ui/separator"
+import {
+  SidebarInset,
+  SidebarProvider,
+  SidebarTrigger,
+} from "@/components/ui/sidebar"
+import { Skeleton } from "@/components/ui/skeleton"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
+import {
+  COSAVU_DATA_API_BASE_URL,
+  COSAVU_STAN_API_BASE_URL,
+} from "@/lib/cosavu-api"
+import { auth } from "@/lib/firebase"
+
+type StoredRecord = Record<string, unknown>
+
+type WorkspaceOverview = {
+  api: {
+    activeKeys: number
+    latestIssue: string
+  }
+  billing: {
+    usagePercent: number
+    currentBill: number
+    paidInvoices: number
+  }
+  buckets: {
+    total: number
+    files: number
+    storageBytes: number
+  }
+  warehouse: {
+    connected: number
+    runs: number
+    indexedBytes: number
+  }
+  tenants: {
+    active: number
+    syncing: number
+  }
+  logs: {
+    total: number
+    warnings: number
+    errors: number
+  }
+  queries: {
+    total: number
+    p95Latency: number
+    successRate: number
+    retentionRate: number
+  }
+  context: {
+    requests: number
+    savedTokens: number
+    spendSaved: number
+    reduction: number
+    latencySaved: number
+  }
+  admin: {
+    workspaceName: string
+    region: string
+    securityScore: number
+  }
+}
+
+const STORAGE_PREFIXES = {
+  apiKeys: "cosavu:api-keys",
+  buckets: "cosavu:buckets",
+  bucketFiles: "cosavu:bucket-files",
+  warehouses: "cosavu:warehouses",
+  warehouseRuns: "cosavu:warehouse-runs",
+  tenants: "cosavu:tenants",
+  logs: "cosavu:system-logs",
+  queries: "cosavu:query-analytics",
+  context: "cosavu:context-api",
+  admin: "cosavu:admin-settings",
+}
+
+const FALLBACK_OVERVIEW: WorkspaceOverview = {
+  api: {
+    activeKeys: 1,
+    latestIssue: "Apr 18, 2026",
+  },
+  billing: {
+    usagePercent: 30,
+    currentBill: 48.36,
+    paidInvoices: 4,
+  },
+  buckets: {
+    total: 3,
+    files: 47,
+    storageBytes: 1887436800,
+  },
+  warehouse: {
+    connected: 2,
+    runs: 11,
+    indexedBytes: 7516192768,
+  },
+  tenants: {
+    active: 4,
+    syncing: 1,
+  },
+  logs: {
+    total: 128,
+    warnings: 6,
+    errors: 1,
+  },
+  queries: {
+    total: 1482,
+    p95Latency: 73,
+    successRate: 96,
+    retentionRate: 58,
+  },
+  context: {
+    requests: 22240,
+    savedTokens: 15147860,
+    spendSaved: 30.3,
+    reduction: 79,
+    latencySaved: 613,
+  },
+  admin: {
+    workspaceName: "Cosavu",
+    region: "us-east-1",
+    securityScore: 100,
+  },
+}
+
+function getStorageKey(prefix: string, email?: string | null) {
+  return `${prefix}:${email?.toLowerCase() || "unknown"}`
+}
+
+function readStoredArray(prefix: string, email?: string | null) {
+  if (typeof window === "undefined") return []
+
+  try {
+    const rawValue = window.localStorage.getItem(getStorageKey(prefix, email))
+    if (!rawValue) return []
+
+    const parsedValue = JSON.parse(rawValue)
+    return Array.isArray(parsedValue) ? (parsedValue as StoredRecord[]) : []
+  } catch {
+    return []
+  }
+}
+
+function readStoredObject(prefix: string, email?: string | null) {
+  if (typeof window === "undefined") return null
+
+  try {
+    const rawValue = window.localStorage.getItem(getStorageKey(prefix, email))
+    if (!rawValue) return null
+
+    const parsedValue = JSON.parse(rawValue)
+    return parsedValue && !Array.isArray(parsedValue)
+      ? (parsedValue as StoredRecord)
+      : null
+  } catch {
+    return null
+  }
+}
+
+function toNumber(value: unknown, fallback = 0) {
+  const numberValue = Number(value)
+  return Number.isFinite(numberValue) ? numberValue : fallback
+}
+
+function formatNumber(value: number) {
+  return new Intl.NumberFormat("en").format(Math.round(value))
+}
+
+function formatCompact(value: number) {
+  return new Intl.NumberFormat("en", {
+    notation: "compact",
+    maximumFractionDigits: value >= 1000 ? 1 : 0,
+  }).format(value)
+}
+
+function formatCurrency(value: number) {
+  return new Intl.NumberFormat("en", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: value < 100 ? 2 : 0,
+    maximumFractionDigits: value < 100 ? 2 : 0,
+  }).format(value)
+}
+
+function formatBytes(bytes: number) {
+  if (!bytes) return "0 B"
+
+  const units = ["B", "KB", "MB", "GB", "TB"]
+  const unitIndex = Math.min(
+    Math.floor(Math.log(bytes) / Math.log(1024)),
+    units.length - 1
+  )
+  const value = bytes / 1024 ** unitIndex
+
+  return `${value.toFixed(value >= 10 || unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`
+}
+
+function formatDateLabel(value?: unknown) {
+  if (!value || typeof value !== "string") return "None"
+
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(new Date(value))
+}
+
+function percentile(values: number[], percentileValue: number) {
+  if (values.length === 0) return 0
+
+  const sortedValues = [...values].sort((a, b) => a - b)
+  const index = Math.ceil((percentileValue / 100) * sortedValues.length) - 1
+
+  return sortedValues[Math.max(0, Math.min(sortedValues.length - 1, index))]
+}
+
+function sumStoredNumber(records: StoredRecord[], keys: string[]) {
+  return records.reduce((sum, record) => {
+    const value = keys.find((key) => record[key] != null)
+    return sum + (value ? toNumber(record[value]) : 0)
+  }, 0)
+}
+
+function deriveContextOverview(contextRuns: StoredRecord[]) {
+  if (contextRuns.length === 0) return FALLBACK_OVERVIEW.context
+
+  const requests = contextRuns.reduce(
+    (sum, run) => sum + toNumber(run.requestCount, 1),
+    0
+  )
+  const originalTokens = contextRuns.reduce(
+    (sum, run) =>
+      sum + toNumber(run.originalTokens) * toNumber(run.requestCount, 1),
+    0
+  )
+  const optimizedTokens = contextRuns.reduce(
+    (sum, run) =>
+      sum + toNumber(run.optimizedTokens) * toNumber(run.requestCount, 1),
+    0
+  )
+  const savedTokens = Math.max(0, originalTokens - optimizedTokens)
+  const reduction =
+    originalTokens === 0 ? 0 : Math.round((savedTokens / originalTokens) * 100)
+  const latencySaved =
+    requests === 0
+      ? 0
+      : Math.round(
+          contextRuns.reduce((sum, run) => {
+            return (
+              sum +
+              Math.max(
+                0,
+                toNumber(run.unoptimizedLatencyMs) -
+                  toNumber(run.optimizedLatencyMs)
+              ) *
+                toNumber(run.requestCount, 1)
+            )
+          }, 0) / requests
+        )
+
+  return {
+    requests,
+    savedTokens,
+    spendSaved: (savedTokens / 1000) * 0.002,
+    reduction,
+    latencySaved,
+  }
+}
+
+function readWorkspaceOverview(email?: string | null): WorkspaceOverview {
+  const apiKeys = readStoredArray(STORAGE_PREFIXES.apiKeys, email)
+  const buckets = readStoredArray(STORAGE_PREFIXES.buckets, email)
+  const bucketFiles = readStoredArray(STORAGE_PREFIXES.bucketFiles, email)
+  const warehouses = readStoredArray(STORAGE_PREFIXES.warehouses, email)
+  const warehouseRuns = readStoredArray(STORAGE_PREFIXES.warehouseRuns, email)
+  const tenants = readStoredArray(STORAGE_PREFIXES.tenants, email)
+  const logs = readStoredArray(STORAGE_PREFIXES.logs, email)
+  const queries = readStoredArray(STORAGE_PREFIXES.queries, email)
+  const contextRuns = readStoredArray(STORAGE_PREFIXES.context, email)
+  const adminSettings = readStoredObject(STORAGE_PREFIXES.admin, email)
+
+  const queryLatencies = queries.map((query) => toNumber(query.totalMs))
+  const successfulQueries = queries.filter(
+    (query) => query.status !== "error"
+  ).length
+  const retainedQueries = queries.filter(
+    (query) => toNumber(query.candidateCount) > 0
+  )
+  const retentionRate =
+    retainedQueries.length === 0
+      ? FALLBACK_OVERVIEW.queries.retentionRate
+      : Math.round(
+          (retainedQueries.reduce((sum, query) => {
+            return (
+              sum +
+              toNumber(query.retainedCount) / toNumber(query.candidateCount, 1)
+            )
+          }, 0) /
+            retainedQueries.length) *
+            100
+        )
+  const activeKeys = apiKeys.filter((key) => key.status !== "revoked").length
+  const latestIssue =
+    apiKeys.length === 0
+      ? FALLBACK_OVERVIEW.api.latestIssue
+      : formatDateLabel(apiKeys[0]?.created_at || apiKeys[0]?.createdAt)
+  const storageBytes =
+    sumStoredNumber(buckets, ["sizeBytes", "storageBytes", "totalBytes"]) ||
+    sumStoredNumber(bucketFiles, ["size", "sizeBytes", "bytes"])
+  const indexedBytes = sumStoredNumber(warehouses, [
+    "indexedBytes",
+    "sizeBytes",
+    "storageBytes",
+  ])
+
+  return {
+    api: {
+      activeKeys: activeKeys || FALLBACK_OVERVIEW.api.activeKeys,
+      latestIssue,
+    },
+    billing: {
+      usagePercent: 30,
+      currentBill: Math.max(
+        FALLBACK_OVERVIEW.billing.currentBill,
+        deriveContextOverview(contextRuns).spendSaved + 18.06
+      ),
+      paidInvoices: FALLBACK_OVERVIEW.billing.paidInvoices,
+    },
+    buckets: {
+      total: buckets.length || FALLBACK_OVERVIEW.buckets.total,
+      files: bucketFiles.length || FALLBACK_OVERVIEW.buckets.files,
+      storageBytes: storageBytes || FALLBACK_OVERVIEW.buckets.storageBytes,
+    },
+    warehouse: {
+      connected:
+        warehouses.filter((warehouse) => warehouse.status !== "paused")
+          .length || FALLBACK_OVERVIEW.warehouse.connected,
+      runs: warehouseRuns.length || FALLBACK_OVERVIEW.warehouse.runs,
+      indexedBytes: indexedBytes || FALLBACK_OVERVIEW.warehouse.indexedBytes,
+    },
+    tenants: {
+      active:
+        tenants.filter((tenant) => tenant.status !== "attention").length ||
+        FALLBACK_OVERVIEW.tenants.active,
+      syncing:
+        tenants.filter((tenant) => tenant.status === "syncing").length ||
+        FALLBACK_OVERVIEW.tenants.syncing,
+    },
+    logs: {
+      total: logs.length || FALLBACK_OVERVIEW.logs.total,
+      warnings:
+        logs.filter((log) => log.level === "warning").length ||
+        FALLBACK_OVERVIEW.logs.warnings,
+      errors:
+        logs.filter((log) => log.level === "error").length ||
+        FALLBACK_OVERVIEW.logs.errors,
+    },
+    queries: {
+      total: queries.length || FALLBACK_OVERVIEW.queries.total,
+      p95Latency:
+        Math.round(percentile(queryLatencies, 95)) ||
+        FALLBACK_OVERVIEW.queries.p95Latency,
+      successRate:
+        queries.length === 0
+          ? FALLBACK_OVERVIEW.queries.successRate
+          : Math.round((successfulQueries / queries.length) * 100),
+      retentionRate,
+    },
+    context: deriveContextOverview(contextRuns),
+    admin: {
+      workspaceName:
+        typeof adminSettings?.workspaceName === "string"
+          ? adminSettings.workspaceName
+          : FALLBACK_OVERVIEW.admin.workspaceName,
+      region:
+        typeof adminSettings?.defaultRegion === "string"
+          ? adminSettings.defaultRegion
+          : FALLBACK_OVERVIEW.admin.region,
+      securityScore: FALLBACK_OVERVIEW.admin.securityScore,
+    },
+  }
 }
 
 export default function Dashboard() {
-  const router = useRouter();
-  const [loading, setLoading] = useState(true);
-  const [user, setUser] = useState<any>(null);
-  const [apiKey, setApiKey] = useState("csvu_k8y" + Math.random().toString(36).substring(7) + "_v2");
-  const [showKey, setShowKey] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const [selectedLanguage, setSelectedLanguage] = useState("NodeJS");
-  const [selectedModel, setSelectedModel] = useState("cosavu-medium");
+  const router = useRouter()
+  const { theme, setTheme } = useTheme()
+
+  const [mounted, setMounted] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [user, setUser] = useState<User | null>(null)
+  const [overview, setOverview] = useState<WorkspaceOverview>(FALLBACK_OVERVIEW)
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => setMounted(true))
+
+    return () => window.cancelAnimationFrame(frame)
+  }, [])
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       if (!currentUser) {
-        router.push("/login");
-      } else {
-        setUser(currentUser);
-        setLoading(false);
+        router.push("/login")
+        return
       }
-    });
-    return () => unsubscribe();
-  }, [router]);
 
-  const generateNewKey = async () => {
-    if (!user) return;
-    const { api_key } = await createApiKey(
-      user.displayName || user.email?.split('@')[0] || "User",
-      user.email || "unknown@cosavu.com",
-      "default"
-    );
-    if (api_key) {
-      setApiKey(api_key);
-      setCopied(false);
-    }
-  };
+      setUser(currentUser)
+      setOverview(readWorkspaceOverview(currentUser.email))
+      setLoading(false)
+    })
 
-  const copyToClipboard = () => {
-    navigator.clipboard.writeText(apiKey);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
+    return () => unsubscribe()
+  }, [router])
+
+  const savingsTrend = useMemo(() => {
+    const base = Math.max(180000, overview.context.savedTokens / 7)
+    const factors = [0.72, 0.86, 0.78, 1.05, 0.94, 1.18, 1.34]
+    const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+    return factors.map((factor, index) => ({
+      day: days[index],
+      tokens: Math.round(base * factor),
+      spend: estimateSpend(base * factor),
+    }))
+  }, [overview.context.savedTokens])
+
+  const spendMix = useMemo(() => {
+    const bill = overview.billing.currentBill
+
+    return [
+      {
+        label: "ContextAPI",
+        value: overview.context.spendSaved,
+        share: Math.min(
+          100,
+          Math.round((overview.context.spendSaved / bill) * 100)
+        ),
+      },
+      {
+        label: "Query",
+        value: bill * 0.38,
+        share: 38,
+      },
+      {
+        label: "Storage",
+        value: bill * 0.19,
+        share: 19,
+      },
+      {
+        label: "Warehouse",
+        value: bill * 0.13,
+        share: 13,
+      },
+    ]
+  }, [overview.billing.currentBill, overview.context.spendSaved])
+
+  const pageCards = useMemo(
+    () => [
+      {
+        title: "ContextAPI",
+        href: "/context-api",
+        icon: Sparkles,
+        metric: formatCompact(overview.context.savedTokens),
+        label: "tokens saved",
+        progress: overview.context.reduction,
+      },
+      {
+        title: "Query Analytics",
+        href: "/query-analytics",
+        icon: BarChart2,
+        metric: `${overview.queries.p95Latency}ms`,
+        label: "p95 latency",
+        progress: overview.queries.successRate,
+      },
+      {
+        title: "System Logs",
+        href: "/system-logs",
+        icon: List,
+        metric: formatNumber(overview.logs.total),
+        label: `${overview.logs.errors} errors`,
+        progress: Math.max(0, 100 - overview.logs.errors * 12),
+      },
+      {
+        title: "Buckets",
+        href: "/buckets",
+        icon: Database,
+        metric: formatNumber(overview.buckets.total),
+        label: `${formatNumber(overview.buckets.files)} files`,
+        progress: 74,
+      },
+      {
+        title: "Warehouse",
+        href: "/warehouse",
+        icon: Unplug,
+        metric: formatNumber(overview.warehouse.connected),
+        label: `${overview.warehouse.runs} sync runs`,
+        progress: 82,
+      },
+      {
+        title: "Tenants",
+        href: "/tenants",
+        icon: Boxes,
+        metric: formatNumber(overview.tenants.active),
+        label: `${overview.tenants.syncing} syncing`,
+        progress: 86,
+      },
+      {
+        title: "API Keys",
+        href: "/api",
+        icon: KeyRound,
+        metric: formatNumber(overview.api.activeKeys),
+        label: overview.api.latestIssue,
+        progress: overview.api.activeKeys > 0 ? 100 : 0,
+      },
+      {
+        title: "Billing",
+        href: "/billing",
+        icon: CreditCard,
+        metric: formatCurrency(overview.billing.currentBill),
+        label: `${overview.billing.usagePercent}% usage`,
+        progress: overview.billing.usagePercent,
+      },
+      {
+        title: "Admin Settings",
+        href: "/admin-settings",
+        icon: Settings,
+        metric: `${overview.admin.securityScore}%`,
+        label: overview.admin.region,
+        progress: overview.admin.securityScore,
+      },
+    ],
+    [overview]
+  )
+
+  const maxTrendValue = Math.max(...savingsTrend.map((item) => item.tokens))
+
+  const refreshOverview = () => {
+    setRefreshing(true)
+    setOverview(readWorkspaceOverview(user?.email))
+    window.setTimeout(() => setRefreshing(false), 550)
+  }
 
   if (loading) {
     return (
-      <div className="h-screen w-full bg-background flex items-center justify-center text-muted-foreground text-sm">
-        Loading Cosavu...
-      </div>
-    );
+      <SidebarProvider defaultOpen>
+        <div className="flex min-h-screen w-full bg-background text-foreground">
+          <AppSidebar />
+          <SidebarInset className="flex h-screen w-full flex-col overflow-y-auto shadow-none">
+            <header className="sticky top-0 z-50 flex h-14 shrink-0 items-center gap-2 bg-background px-4">
+              <SidebarTrigger className="-ml-2 text-muted-foreground hover:text-foreground" />
+              <Skeleton className="h-4 w-44" />
+              <Skeleton className="ml-auto size-8 rounded-sm" />
+            </header>
+            <main className="mx-auto flex w-full max-w-[1400px] flex-1 flex-col gap-4 p-4 lg:p-6">
+              <Skeleton className="h-48 w-full rounded-sm" />
+              <div className="grid gap-4 xl:grid-cols-[1fr_0.85fr]">
+                <Skeleton className="h-96 rounded-sm" />
+                <Skeleton className="h-96 rounded-sm" />
+              </div>
+            </main>
+          </SidebarInset>
+        </div>
+      </SidebarProvider>
+    )
   }
-
-  const codeSnippets: Record<string, string> = {
-    NodeJS: `async function queryCosavu(prompt) {
-  const response = await fetch('https://api.cosavu.com/query', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-API-Key': '${apiKey}'
-    },
-    body: JSON.stringify({
-      query: prompt,
-      model: "${selectedModel}",
-      system: "car-1",
-      collection: "enterprise-docs",
-      car1_threshold: 0.65
-    })
-  });
-  
-  return await response.json();
-}`,
-    Python: `import requests
-
-def query_cosavu(prompt):
-    url = "https://api.cosavu.com/query"
-    payload = {
-        "query": prompt,
-        "model": "${selectedModel}",
-        "system": "car-1",
-        "collection": "enterprise-docs",
-        "car1_threshold": 0.65
-    }
-    headers = {"X-API-Key": "${apiKey}"}
-    
-    response = requests.post(url, json=payload, headers=headers)
-    return response.json()`
-  };
 
   return (
     <SidebarProvider defaultOpen>
       <div className="flex min-h-screen w-full bg-background text-foreground">
         <AppSidebar />
-        <SidebarInset className="flex h-screen w-full flex-col shadow-none overflow-y-auto relative">
-
-          {/* Header */}
-          <header className="flex h-14 shrink-0 items-center gap-2 bg-background px-4 sticky top-0 z-50">
+        <SidebarInset className="relative flex h-screen w-full flex-col overflow-y-auto shadow-none">
+          <header className="sticky top-0 z-50 flex h-14 shrink-0 items-center gap-2 bg-background/60 px-4 backdrop-blur-md supports-[backdrop-filter]:bg-background/45">
             <SidebarTrigger className="-ml-2 text-muted-foreground hover:text-foreground" />
-            <h1 className="text-sm font-medium text-muted-foreground">Getting Started</h1>
+            <Breadcrumb>
+              <BreadcrumbList>
+                <BreadcrumbItem>{overview.admin.workspaceName}</BreadcrumbItem>
+                <BreadcrumbSeparator>
+                  <ChevronRight className="size-3.5" />
+                </BreadcrumbSeparator>
+                <BreadcrumbItem>
+                  <BreadcrumbPage>Getting Started</BreadcrumbPage>
+                </BreadcrumbItem>
+              </BreadcrumbList>
+            </Breadcrumb>
             <div className="ml-auto flex items-center gap-2">
-              <ThemeToggle />
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    className="rounded-sm"
+                    aria-label="Refresh overview"
+                    disabled={refreshing}
+                    onClick={refreshOverview}
+                  >
+                    <RefreshCw
+                      className={refreshing ? "size-4 animate-spin" : "size-4"}
+                    />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Refresh overview</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    className="rounded-sm"
+                    aria-label="Toggle theme"
+                    disabled={!mounted}
+                    onClick={() =>
+                      setTheme(theme === "dark" ? "light" : "dark")
+                    }
+                  >
+                    {mounted && theme === "dark" ? (
+                      <Sun className="size-4" />
+                    ) : (
+                      <Moon className="size-4" />
+                    )}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Toggle theme</TooltipContent>
+              </Tooltip>
             </div>
           </header>
 
-          <main className="flex-1 p-6 lg:p-10 w-full max-w-7xl mx-auto flex flex-col gap-10">
-
-            {/* Banner */}
-            <div className="relative overflow-hidden rounded-2xl bg-card p-8 shadow-sm flex flex-col md:flex-row items-center justify-between gap-8">
-              <div className="flex flex-col z-10 space-y-4 max-w-xl">
-                <h2 className="text-3xl font-semibold tracking-tight flex items-center gap-3">
-                  <span className="text-2xl">👋</span>
-                  Hi {user?.displayName ? user.displayName.split(' ')[0] : 'Developer'}, welcome to Cosavu!
-                </h2>
-                <p className="text-muted-foreground text-lg">
-                  Take your Gen AI apps to production <span className="italic text-foreground">confidently</span> in just a few steps
-                </p>
-                <div className="flex flex-wrap items-center gap-6 mt-2 text-sm font-medium text-muted-foreground">
-                  <a href="#" className="flex items-center gap-2 hover:text-foreground transition-colors">
-                    <Terminal className="size-4" /> Developer Docs
-                  </a>
-                  <a href="#" className="flex items-center gap-2 hover:text-foreground transition-colors">
-                    <svg viewBox="0 0 24 24" className="fill-current size-4"><path d="M20.317 4.3698a19.7913 19.7913 0 00-4.8851-1.5152.0741.0741 0 00-.0785.0371c-.211.3753-.4447.8648-.6083 1.2495-1.8447-.2762-3.68-.2762-5.4868 0-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077 0 00-.0785-.037 19.7363 19.7363 0 00-4.8852 1.515.0699.0699 0 00-.0321.0277C.5334 9.0458-.319 13.5799.0992 18.0578a.0824.0824 0 00.0312.0561c2.0528 1.5076 4.0413 2.4228 5.9929 3.0294a.0777.0777 0 00.0842-.0276c.4616-.6304.8731-1.2952 1.226-1.9942a.076.076 0 00-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077 0 01-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743 0 01.0776-.0105c3.9278 1.7933 8.18 1.7933 12.0614 0a.0739.0739 0 01.0785.0095c.1202.099.246.1981.3728.2924a.077.077 0 01-.0066.1276 12.2986 12.2986 0 01-1.873.8914.0766.0766 0 00-.0407.1067c.3604.698.7719 1.3628 1.225 1.9932a.076.076 0 00.0842.0286c1.961-.6067 3.9495-1.5219 6.0023-3.0294a.077.077 0 00.0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061 0 00-.0312-.0286zM8.02 15.3312c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9555-2.4189 2.157-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.9555 2.4189-2.1569 2.4189zm7.9748 0c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9554-2.4189 2.1569-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.4189-2.1568 2.4189Z"/></svg>
-                    Join Discord
-                  </a>
-                  <a href="#" className="flex items-center gap-2 hover:text-foreground transition-colors">
-                    <svg viewBox="0 0 24 24" className="fill-current size-4"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>
-                    View Github
-                  </a>
-                </div>
-              </div>
-
-              {/* Product demo graphic */}
-              <div className="relative w-full max-w-[320px] aspect-video rounded-xl bg-gradient-to-br from-rose-500 via-indigo-600 to-purple-800 p-0.5 hidden sm:block shadow-lg flex-shrink-0">
-                <div className="w-full h-full bg-card/80 backdrop-blur-sm rounded-[10px] overflow-hidden relative flex items-center justify-end">
-                  <div className="absolute top-4 left-4 z-10 text-white font-bold text-xl drop-shadow-md leading-snug">
-                    Product<br />Demo
+          <main className="mx-auto flex w-full max-w-[1400px] flex-1 flex-col gap-4 p-4 lg:p-6">
+            <Card className="rounded-sm border-border/60 shadow-sm">
+              <CardHeader className="gap-4 lg:grid-cols-[1fr_auto]">
+                <div className="space-y-2">
+                  <div className="flex flex-wrap gap-2">
+                    <Badge className="w-fit rounded-sm" variant="secondary">
+                      Workspace overview
+                    </Badge>
+                    <Badge
+                      className="w-fit rounded-sm font-mono"
+                      variant="outline"
+                    >
+                      {COSAVU_STAN_API_BASE_URL}
+                    </Badge>
+                    <Badge
+                      className="w-fit rounded-sm font-mono"
+                      variant="outline"
+                    >
+                      {COSAVU_DATA_API_BASE_URL}
+                    </Badge>
                   </div>
-                  <PlayCircle className="absolute bottom-4 left-4 text-white size-8 drop-shadow-md z-10" />
-                  <div className="w-3/5 h-5/6 bg-muted border border-border rounded translate-x-4 p-2 flex flex-col gap-2 opacity-80">
-                    <div className="flex justify-between items-center bg-card border border-border rounded p-1">
-                      <span className="block h-1 w-8 bg-muted-foreground/30 rounded-full" />
-                      <span className="block h-1 w-4 bg-muted-foreground/30 rounded-full" />
+                  <CardTitle className="text-2xl font-semibold tracking-tight md:text-3xl">
+                    Getting Started
+                  </CardTitle>
+                  <CardDescription className="max-w-2xl">
+                    One console view for API keys, isolated buckets, warehouse
+                    sync, query health, ContextAPI savings, billing, tenants,
+                    and administration.
+                  </CardDescription>
+                </div>
+                <CardAction className="col-span-full col-start-1 row-start-2 flex flex-wrap items-center gap-2 justify-self-start lg:col-span-1 lg:col-start-2 lg:row-start-1 lg:justify-self-end">
+                  <Button asChild variant="outline" className="rounded-sm">
+                    <Link href="/context-api">
+                      <Sparkles className="size-4" />
+                      ContextAPI
+                    </Link>
+                  </Button>
+                  <Button asChild className="rounded-sm">
+                    <Link href="/query-analytics">
+                      <BarChart2 className="size-4" />
+                      Analytics
+                    </Link>
+                  </Button>
+                </CardAction>
+              </CardHeader>
+              <CardContent>
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                  <div className="rounded-sm bg-muted/30 p-4">
+                    <div className="mb-3 flex items-center justify-between">
+                      <span className="text-sm text-muted-foreground">
+                        Tokens saved
+                      </span>
+                      <Zap className="size-4 text-muted-foreground" />
                     </div>
-                    <div className="h-full w-full bg-gradient-to-t from-orange-500/20 to-transparent border-b-2 border-orange-500 relative rounded-sm">
-                      <svg className="absolute w-full h-full opacity-60" preserveAspectRatio="none">
-                        <path d="M0,50 Q10,20 20,40 T40,60 T60,30 T80,50 T100,20 L100,100 L0,100 Z" fill="rgba(249,115,22,0.1)" stroke="#f97316" strokeWidth="2" />
-                      </svg>
+                    <p className="text-2xl font-semibold">
+                      {formatCompact(overview.context.savedTokens)}
+                    </p>
+                  </div>
+                  <div className="rounded-sm bg-muted/30 p-4">
+                    <div className="mb-3 flex items-center justify-between">
+                      <span className="text-sm text-muted-foreground">
+                        Spend avoided
+                      </span>
+                      <BadgeDollarSign className="size-4 text-muted-foreground" />
                     </div>
+                    <p className="text-2xl font-semibold">
+                      {formatCurrency(overview.context.spendSaved)}
+                    </p>
+                  </div>
+                  <div className="rounded-sm bg-muted/30 p-4">
+                    <div className="mb-3 flex items-center justify-between">
+                      <span className="text-sm text-muted-foreground">
+                        Query success
+                      </span>
+                      <ShieldCheck className="size-4 text-muted-foreground" />
+                    </div>
+                    <p className="text-2xl font-semibold">
+                      {overview.queries.successRate}%
+                    </p>
+                  </div>
+                  <div className="rounded-sm bg-muted/30 p-4">
+                    <div className="mb-3 flex items-center justify-between">
+                      <span className="text-sm text-muted-foreground">
+                        Cloud data
+                      </span>
+                      <Database className="size-4 text-muted-foreground" />
+                    </div>
+                    <p className="text-2xl font-semibold">
+                      {formatBytes(
+                        overview.buckets.storageBytes +
+                          overview.warehouse.indexedBytes
+                      )}
+                    </p>
+                  </div>
+                  <div className="rounded-sm bg-muted/30 p-4">
+                    <div className="mb-3 flex items-center justify-between">
+                      <span className="text-sm text-muted-foreground">
+                        Current bill
+                      </span>
+                      <CreditCard className="size-4 text-muted-foreground" />
+                    </div>
+                    <p className="text-2xl font-semibold">
+                      {formatCurrency(overview.billing.currentBill)}
+                    </p>
                   </div>
                 </div>
-              </div>
+              </CardContent>
+            </Card>
+
+            <div className="grid gap-4 xl:grid-cols-[1.05fr_0.95fr]">
+              <Card className="rounded-sm border-border/60 shadow-sm">
+                <CardHeader>
+                  <CardTitle>Token savings</CardTitle>
+                  <CardDescription>
+                    STAN context reduction and estimated savings across the
+                    week.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-5">
+                  <div className="flex h-48 items-end gap-3 rounded-sm bg-muted/25 p-4">
+                    {savingsTrend.map((item) => {
+                      const height = Math.max(
+                        14,
+                        Math.round((item.tokens / maxTrendValue) * 100)
+                      )
+
+                      return (
+                        <div
+                          key={item.day}
+                          className="flex h-full flex-1 flex-col justify-end gap-2"
+                        >
+                          <div className="flex min-h-0 flex-1 items-end">
+                            <div
+                              className="w-full rounded-sm bg-primary"
+                              style={{ height: `${height}%` }}
+                            />
+                          </div>
+                          <div className="text-center">
+                            <p className="text-xs font-medium">{item.day}</p>
+                            <p className="text-[11px] text-muted-foreground">
+                              {formatCompact(item.tokens)}
+                            </p>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <div className="rounded-sm bg-muted/30 p-4">
+                      <p className="text-sm text-muted-foreground">Reduction</p>
+                      <p className="mt-2 text-xl font-semibold">
+                        {overview.context.reduction}%
+                      </p>
+                    </div>
+                    <div className="rounded-sm bg-muted/30 p-4">
+                      <p className="text-sm text-muted-foreground">
+                        Latency saved
+                      </p>
+                      <p className="mt-2 text-xl font-semibold">
+                        {overview.context.latencySaved}ms
+                      </p>
+                    </div>
+                    <div className="rounded-sm bg-muted/30 p-4">
+                      <p className="text-sm text-muted-foreground">
+                        Context calls
+                      </p>
+                      <p className="mt-2 text-xl font-semibold">
+                        {formatCompact(overview.context.requests)}
+                      </p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="rounded-sm border-border/60 shadow-sm">
+                <CardHeader>
+                  <CardTitle>Spend mix</CardTitle>
+                  <CardDescription>
+                    Current usage bill split across Cosavu surfaces.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {spendMix.map((item) => (
+                    <div
+                      key={item.label}
+                      className="rounded-sm bg-muted/30 p-4"
+                    >
+                      <div className="mb-3 flex items-center justify-between gap-3">
+                        <div>
+                          <p className="font-medium">{item.label}</p>
+                          <p className="text-sm text-muted-foreground">
+                            {formatCurrency(item.value)}
+                          </p>
+                        </div>
+                        <Badge className="rounded-sm" variant="outline">
+                          {item.share}%
+                        </Badge>
+                      </div>
+                      <Progress value={item.share} className="h-2" />
+                    </div>
+                  ))}
+
+                  <Separator />
+
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="rounded-sm bg-muted/30 p-4">
+                      <p className="text-sm text-muted-foreground">
+                        Monthly usage
+                      </p>
+                      <p className="mt-2 text-xl font-semibold">
+                        {overview.billing.usagePercent}%
+                      </p>
+                    </div>
+                    <div className="rounded-sm bg-muted/30 p-4">
+                      <p className="text-sm text-muted-foreground">
+                        Paid invoices
+                      </p>
+                      <p className="mt-2 text-xl font-semibold">
+                        {overview.billing.paidInvoices}
+                      </p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
             </div>
 
-            {/* Stepper Content - Centered */}
-            <div className="flex flex-col items-center gap-16 w-full py-10">
-
-              {/* Step 1 */}
-              <div className="flex flex-col items-center gap-8 w-full max-w-4xl">
-                <div className="text-center">
-                  <h3 className="text-2xl font-semibold">Setup your environment</h3>
-                  <p className="text-muted-foreground mt-2 max-w-md mx-auto">Get your Cosavu API key & create a new LLM integration</p>
-                </div>
-
-                <div className="bg-card rounded-2xl p-8 shadow-sm w-full flex flex-col gap-10">
-                  {/* API Key block */}
-                  <div className="flex flex-col items-center gap-4">
-                    <div className="flex items-center gap-2">
-                      <div className="size-6 rounded-full bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center">
-                        <svg className="size-3.5 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>
-                      </div>
-                      <h4 className="font-semibold text-lg">Your Cosavu API key is ready to use</h4>
-                    </div>
-                    <p className="text-sm text-muted-foreground text-center">Use this to authenticate all your requests to Cosavu</p>
-                    <div className="w-full max-w-lg flex items-center bg-muted rounded-xl px-4 py-3 mt-2 relative group">
-                      <span className="font-mono text-sm text-muted-foreground flex-1 truncate">
-                        {showKey ? apiKey : apiKey.replace(/.(?=.{4})/g, '*')}
-                      </span>
-                      <div className="flex items-center gap-3 text-muted-foreground ml-4">
-                        <button className="hover:text-foreground transition-colors p-1" onClick={() => setShowKey(!showKey)}>
-                          {showKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
-                        </button>
-                        <button className="hover:text-foreground transition-colors p-1" onClick={copyToClipboard}>
-                          {copied ? <Check className="size-4 text-emerald-500" /> : <Copy className="size-4" />}
-                        </button>
-                        <button className="hover:text-foreground transition-colors p-1" onClick={generateNewKey}>
-                          <RefreshCw className="size-4" />
-                        </button>
-                      </div>
-                      {copied && (
-                        <div className="absolute -top-10 left-1/2 -track-x-1/2 bg-popover text-popover-foreground text-[10px] px-2 py-1 rounded border shadow-xl animate-in fade-in zoom-in duration-200">
-                          Copied!
-                        </div>
-                      )}
-                    </div>
+            <div className="grid gap-4 xl:grid-cols-[1fr_0.82fr]">
+              <Card className="rounded-sm border-border/60 shadow-sm">
+                <CardHeader className="gap-4 lg:grid-cols-[1fr_auto]">
+                  <div>
+                    <CardTitle>Console cards</CardTitle>
+                    <CardDescription>
+                      Snapshot cards from every workspace page.
+                    </CardDescription>
                   </div>
+                  <CardAction className="justify-self-start lg:justify-self-end">
+                    <Badge className="rounded-sm" variant="outline">
+                      {pageCards.length} pages
+                    </Badge>
+                  </CardAction>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
+                    {pageCards.map((card) => {
+                      const Icon = card.icon
 
-                  <div className="h-px bg-border w-1/4 mx-auto opacity-50" />
-
-                  {/* LLM Connect block */}
-                  <div className="flex flex-col items-center gap-5">
-                    <h4 className="font-semibold text-lg text-center">Securely connect to your LLM</h4>
-                    <p className="text-sm text-muted-foreground text-center">We encrypt your original API keys and generate <span className="underline underline-offset-2 decoration-muted-foreground">disposable keys</span></p>
-                    <Select>
-                      <SelectTrigger className="w-full max-w-lg mt-1 h-12 rounded-xl">
-                        <SelectValue placeholder="Select new AI provider to integrate" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="openai">OpenAI</SelectItem>
-                        <SelectItem value="anthropic">Anthropic</SelectItem>
-                        <SelectItem value="google">Google Gemini</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-              </div>
-
-              {/* Step 2 */}
-              <div className="flex flex-col items-center gap-8 w-full max-w-4xl">
-                <div className="text-center">
-                  <h3 className="text-2xl font-semibold">Integrate Cosavu</h3>
-                  <p className="text-muted-foreground mt-2 max-w-md mx-auto">Choose a framework to integrate Cosavu with. Then, make a test request from your AI app.</p>
-                </div>
-
-                <div className="bg-card rounded-2xl p-8 shadow-sm min-h-[300px] w-full flex flex-col gap-6">
-                  <div className="flex flex-col md:flex-row items-center justify-between gap-4">
-                    <div className="flex items-center gap-3 bg-muted/50 px-4 py-2 rounded-full border border-border/50">
-                      <span className="relative flex h-2.5 w-2.5">
-                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sky-400 opacity-75"></span>
-                        <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-sky-500"></span>
-                      </span>
-                      <span className="text-xs font-semibold tracking-wide uppercase text-muted-foreground">LISTENING FOR REQUESTS FROM YOUR APP</span>
-                    </div>
-                    <button className="text-xs font-bold text-sky-500 hover:text-sky-400 flex items-center gap-1.5 transition-colors">
-                      Need Help?
-                    </button>
-                  </div>
-
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 w-full">
-                    {/* Code Snippet Block */}
-                    <div className="flex flex-col gap-6">
-                      <div className="flex items-center justify-center gap-3">
-                        <Select value={selectedLanguage} onValueChange={setSelectedLanguage}>
-                          <SelectTrigger className="h-10 rounded-xl px-4 bg-muted w-[140px] border-none shadow-none">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="NodeJS">NodeJS</SelectItem>
-                            <SelectItem value="Python">Python</SelectItem>
-                          </SelectContent>
-                        </Select>
-                        <Select value={selectedModel} onValueChange={setSelectedModel}>
-                      <SelectTrigger className="h-10 rounded-xl px-6 bg-muted border-none shadow-none w-[180px]">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="cosavu-small">Cosavu Small</SelectItem>
-                        <SelectItem value="cosavu-medium">Cosavu Medium</SelectItem>
-                        <SelectItem value="cosavu-large">Cosavu Large</SelectItem>
-                      </SelectContent>
-                    </Select>
-                      </div>
-
-                      <div className="bg-muted rounded-xl p-6 font-mono text-muted-foreground text-[13px] leading-relaxed border border-border/10 relative overflow-hidden group min-h-[320px]">
-                        <div className="flex gap-2 mb-4 opacity-30">
-                           <div className="size-2.5 rounded-full bg-red-500/50" />
-                           <div className="size-2.5 rounded-full bg-amber-500/50" />
-                           <div className="size-2.5 rounded-full bg-emerald-500/50" />
-                        </div>
-                        <pre className="whitespace-pre-wrap overflow-x-auto text-[#e4e4e7] dark:text-[#a1a1aa]">
-                          <code>{codeSnippets[selectedLanguage]}</code>
-                        </pre>
-                        <button 
-                          className="absolute top-4 right-4 p-2 bg-background/50 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity"
-                          onClick={() => {
-                            navigator.clipboard.writeText(codeSnippets[selectedLanguage]);
-                            alert("Snippet copied!");
-                          }}
+                      return (
+                        <Link
+                          key={card.href}
+                          href={card.href}
+                          className="rounded-sm bg-muted/25 p-4 transition-colors hover:bg-muted/40"
                         >
-                          <Copy className="size-4" />
-                        </button>
-                      </div>
-                    </div>
+                          <div className="mb-4 flex items-start justify-between gap-3">
+                            <div>
+                              <p className="font-medium">{card.title}</p>
+                              <p className="text-sm text-muted-foreground">
+                                {card.label}
+                              </p>
+                            </div>
+                            <div className="flex size-10 shrink-0 items-center justify-center rounded-sm bg-background text-muted-foreground">
+                              <Icon className="size-5" />
+                            </div>
+                          </div>
+                          <p className="mb-3 text-2xl font-semibold">
+                            {card.metric}
+                          </p>
+                          <Progress value={card.progress} className="h-2" />
+                        </Link>
+                      )
+                    })}
+                  </div>
+                </CardContent>
+              </Card>
 
-                    {/* Performance Insights Block */}
-                    <div className="flex flex-col gap-6">
-                      <div className="flex items-center justify-center h-10">
-                        <span className="text-xs font-bold tracking-widest uppercase text-muted-foreground opacity-50">STAN-1 Optimization stats</span>
-                      </div>
-                      
-                      <div className="bg-[#0c0c0e] rounded-xl p-6 border border-border/20 flex flex-col gap-8 flex-1 min-h-[320px]">
-                        <div className="grid grid-cols-2 gap-6">
-                          <div className="flex flex-col gap-1">
-                            <span className="text-[10px] font-bold uppercase text-muted-foreground tracking-tighter">Token Reduction</span>
-                            <span className="text-4xl font-bold text-emerald-500">80.9%</span>
-                            <span className="text-[10px] text-emerald-500/50 mt-1 flex items-center gap-1">
-                              <Check className="size-2" /> Verified Baseline
+              <div className="space-y-4">
+                <Card className="rounded-sm border-border/60 shadow-sm">
+                  <CardHeader>
+                    <CardTitle>Operational health</CardTitle>
+                    <CardDescription>
+                      Query, storage, and administration posture.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    {[
+                      {
+                        label: "CAR retention",
+                        value: overview.queries.retentionRate,
+                        icon: Target,
+                      },
+                      {
+                        label: "Query success",
+                        value: overview.queries.successRate,
+                        icon: ShieldCheck,
+                      },
+                      {
+                        label: "Workspace security",
+                        value: overview.admin.securityScore,
+                        icon: Gauge,
+                      },
+                    ].map((item) => {
+                      const Icon = item.icon
+
+                      return (
+                        <div
+                          key={item.label}
+                          className="rounded-sm bg-muted/30 p-4"
+                        >
+                          <div className="mb-3 flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-3">
+                              <Icon className="size-4 text-muted-foreground" />
+                              <p className="font-medium">{item.label}</p>
+                            </div>
+                            <span className="text-sm text-muted-foreground">
+                              {item.value}%
                             </span>
                           </div>
-                          <div className="flex flex-col gap-1">
-                            <span className="text-[10px] font-bold uppercase text-muted-foreground tracking-tighter">Avg Latency</span>
-                            <span className="text-4xl font-bold text-sky-500">14.2ms</span>
-                            <span className="text-[10px] text-sky-500/50 mt-1">Real-time Inference</span>
+                          <Progress value={item.value} className="h-2" />
+                        </div>
+                      )
+                    })}
+                  </CardContent>
+                </Card>
+
+                <Card className="rounded-sm border-border/60 shadow-sm">
+                  <CardHeader>
+                    <CardTitle>Latest activity</CardTitle>
+                    <CardDescription>
+                      Fresh signals across the console.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    {[
+                      {
+                        icon: KeyRound,
+                        title: "API key active",
+                        detail: `${overview.api.activeKeys} key ready`,
+                      },
+                      {
+                        icon: Layers3,
+                        title: "Context optimized",
+                        detail: `${formatCompact(overview.context.savedTokens)} tokens removed`,
+                      },
+                      {
+                        icon: Database,
+                        title: "Buckets indexed",
+                        detail: `${formatNumber(overview.buckets.files)} files protected`,
+                      },
+                      {
+                        icon: Clock,
+                        title: "Query p95",
+                        detail: `${overview.queries.p95Latency}ms response path`,
+                      },
+                    ].map((item) => {
+                      const Icon = item.icon
+
+                      return (
+                        <div
+                          key={item.title}
+                          className="flex items-center gap-3 rounded-sm bg-muted/30 p-4"
+                        >
+                          <div className="flex size-10 shrink-0 items-center justify-center rounded-sm bg-background text-muted-foreground">
+                            <Icon className="size-5" />
+                          </div>
+                          <div className="min-w-0">
+                            <p className="font-medium">{item.title}</p>
+                            <p className="truncate text-sm text-muted-foreground">
+                              {item.detail}
+                            </p>
                           </div>
                         </div>
-
-                        <div className="flex flex-col gap-4">
-                           <div className="flex items-center justify-between text-xs font-mono">
-                              <span className="text-muted-foreground">Messiness Score</span>
-                              <span className="text-foreground">0.4729</span>
-                           </div>
-                           <div className="w-full h-1.5 bg-muted rounded-full overflow-hidden">
-                              <div className="h-full bg-emerald-500 w-[47%]" />
-                           </div>
-                           
-                           <div className="flex items-center justify-between text-xs font-mono">
-                              <span className="text-muted-foreground">Compression Target</span>
-                              <span className="text-foreground">59.9%</span>
-                           </div>
-                           <div className="w-full h-1.5 bg-muted rounded-full overflow-hidden">
-                              <div className="h-full bg-sky-500 w-[60%]" />
-                           </div>
-                        </div>
-
-                        <div className="flex-1 bg-muted/30 rounded-lg p-3 font-mono text-[10px] text-zinc-500 overflow-y-auto max-h-[100px]">
-                          <div className="flex gap-2 text-emerald-500 opacity-80"><span>[STAN]</span> <span>✓ Model loaded and ready</span></div>
-                          <div className="flex gap-2"><span>[STAN]</span> <span className="text-zinc-400">✓ Metadata generated in 8.0ms</span></div>
-                          <div className="flex gap-2"><span>[STAN]</span> <span>⚠ Using defaults: DISABLED FOR TEST</span></div>
-                          <div className="flex gap-2 text-sky-500 opacity-80"><span>[STAN]</span> <span>✓ Compression Gate: OPEN</span></div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
+                      )
+                    })}
+                  </CardContent>
+                </Card>
               </div>
             </div>
-
           </main>
         </SidebarInset>
       </div>
     </SidebarProvider>
-  );
+  )
+}
+
+function estimateSpend(tokens: number) {
+  return (tokens / 1000) * 0.002
 }

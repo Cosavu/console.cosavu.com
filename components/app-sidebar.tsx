@@ -2,32 +2,21 @@
 
 import * as React from "react"
 import Link from "next/link"
+import { usePathname } from "next/navigation"
+import { onAuthStateChanged, type User } from "firebase/auth"
 import {
   BarChart2,
   List,
   Database,
   Unplug,
   Bot,
-  Shield,
-  SlidersHorizontal,
-  FlaskConical,
-  MessageSquareQuote,
-  AlignLeft,
   KeyRound,
-  Wrench,
-  Boxes,
   Settings,
-  ArrowUpRight,
-  HelpCircle,
   Crown,
   ChevronDown,
   Rocket,
   Plus,
-  Sparkles,
-  LogOut,
   CreditCard,
-  User as UserIcon,
-  Bell
 } from "lucide-react"
 
 import {
@@ -51,22 +40,67 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
+import { auth } from "@/lib/firebase"
+
+function formatProfileName(user: User | null) {
+  const displayName = user?.displayName?.trim()
+  if (displayName) return displayName
+
+  const emailName = user?.email
+    ?.split("@")[0]
+    ?.replace(/[._-]+/g, " ")
+    .trim()
+
+  if (!emailName) return "Workspace user"
+
+  return emailName.replace(/\b\w/g, (letter) => letter.toUpperCase())
+}
+
+function getProfileInitial(name: string, email?: string | null) {
+  return (name || email || "U").trim().charAt(0).toUpperCase() || "U"
+}
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
+  const pathname = usePathname()
+  const [authUser, setAuthUser] = React.useState<User | null>(
+    () => auth.currentUser
+  )
+  const isActive = React.useCallback(
+    (href: string) =>
+      href === "/"
+        ? pathname === "/"
+        : pathname === href || pathname.startsWith(`${href}/`),
+    [pathname]
+  )
+  const profileName = formatProfileName(authUser)
+  const profileEmail = authUser?.email || "Signed in"
+  const profileInitial = getProfileInitial(profileName, authUser?.email)
+
+  React.useEffect(() => {
+    return onAuthStateChanged(auth, setAuthUser)
+  }, [])
+
   return (
-    <Sidebar variant="sidebar" className="shadow-none border-none" {...props}>
+    <Sidebar variant="sidebar" className="border-none shadow-none" {...props}>
       <SidebarHeader className="p-4">
         <SidebarMenu>
           <SidebarMenuItem>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <SidebarMenuButton size="lg" className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground">
+                <SidebarMenuButton
+                  size="lg"
+                  className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
+                >
                   <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-indigo-500 text-white">
                     <Bot className="size-4" />
                   </div>
                   <div className="grid flex-1 text-left text-sm leading-tight">
-                    <span className="truncate font-semibold text-foreground">Cosavu</span>
-                    <span className="truncate text-xs text-muted-foreground">Team Workspace</span>
+                    <span className="truncate font-semibold text-foreground">
+                      Cosavu
+                    </span>
+                    <span className="truncate text-xs text-muted-foreground">
+                      Team Workspace
+                    </span>
                   </div>
                   <ChevronDown className="ml-auto size-4" />
                 </SidebarMenuButton>
@@ -77,7 +111,9 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 side={props.side === "right" ? "left" : "right"}
                 sideOffset={4}
               >
-                <DropdownMenuLabel className="text-xs text-muted-foreground">Workspaces</DropdownMenuLabel>
+                <DropdownMenuLabel className="text-xs text-muted-foreground">
+                  Workspaces
+                </DropdownMenuLabel>
                 <DropdownMenuItem className="gap-2 p-2">
                   <div className="flex size-6 items-center justify-center rounded-sm border bg-indigo-500 text-white">
                     <Bot className="size-4" />
@@ -93,8 +129,8 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem className="gap-2 p-2">
-                   <Settings className="size-4" />
-                   Manage Workspace
+                  <Settings className="size-4" />
+                  Manage Workspace
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -105,72 +141,113 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       <SidebarContent className="py-2">
         <SidebarMenu className="px-2">
           <SidebarMenuItem>
-            <Link href="/" className="w-full">
-              <SidebarMenuButton isActive className="font-medium">
+            <SidebarMenuButton
+              asChild
+              isActive={isActive("/")}
+              className="font-medium"
+            >
+              <Link href="/">
                 <Rocket className="mr-2 size-4" />
                 Getting Started
-              </SidebarMenuButton>
-            </Link>
+              </Link>
+            </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
 
         <SidebarGroup className="mt-4">
-          <SidebarGroupLabel className="text-[10px] font-bold tracking-wider uppercase">Observability</SidebarGroupLabel>
+          <SidebarGroupLabel className="text-[10px] font-bold tracking-wider">
+            Observability
+          </SidebarGroupLabel>
           <SidebarMenu>
             <SidebarMenuItem>
-              <SidebarMenuButton>
-                <BarChart2 className="mr-2 size-4" />
-                Query Analytics
+              <SidebarMenuButton
+                asChild
+                isActive={isActive("/query-analytics")}
+              >
+                <Link href="/query-analytics">
+                  <BarChart2 className="mr-2 size-4" />
+                  Query Analytics
+                </Link>
               </SidebarMenuButton>
             </SidebarMenuItem>
             <SidebarMenuItem>
-              <SidebarMenuButton>
-                <List className="mr-2 size-4" />
-                System Logs
+              <SidebarMenuButton asChild isActive={isActive("/context-api")}>
+                <Link href="/context-api">
+                  <Bot className="mr-2 size-4" />
+                  ContextAPI
+                </Link>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            <SidebarMenuItem>
+              <SidebarMenuButton asChild isActive={isActive("/system-logs")}>
+                <Link href="/system-logs">
+                  <List className="mr-2 size-4" />
+                  System Logs
+                </Link>
               </SidebarMenuButton>
             </SidebarMenuItem>
           </SidebarMenu>
         </SidebarGroup>
 
         <SidebarGroup>
-          <SidebarGroupLabel className="text-[10px] font-bold tracking-wider uppercase">Knowledge Bases</SidebarGroupLabel>
+          <SidebarGroupLabel className="text-[10px] font-bold tracking-wider">
+            Knowledge bases
+          </SidebarGroupLabel>
           <SidebarMenu>
             <SidebarMenuItem>
-              <SidebarMenuButton>
-                <Database className="mr-2 size-4" />
-                Buckets (Isolated)
+              <SidebarMenuButton asChild isActive={isActive("/buckets")}>
+                <Link href="/buckets">
+                  <Database className="mr-2 size-4" />
+                  Buckets
+                </Link>
               </SidebarMenuButton>
             </SidebarMenuItem>
             <SidebarMenuItem>
-              <SidebarMenuButton>
-                <Unplug className="mr-2 size-4" />
-                Warehouse (S3/GCP)
+              <SidebarMenuButton asChild isActive={isActive("/warehouse")}>
+                <Link href="/warehouse">
+                  <Unplug className="mr-2 size-4" />
+                  Warehouse
+                </Link>
               </SidebarMenuButton>
             </SidebarMenuItem>
           </SidebarMenu>
         </SidebarGroup>
 
         <SidebarGroup>
-          <SidebarGroupLabel className="text-[10px] font-bold tracking-wider uppercase">System Administration</SidebarGroupLabel>
+          <SidebarGroupLabel className="text-[10px] font-bold tracking-wider">
+            System administration
+          </SidebarGroupLabel>
           <SidebarMenu>
             <SidebarMenuItem>
-              <SidebarMenuButton>
-                <Crown className="mr-2 size-4" />
-                Tenants
+              <SidebarMenuButton asChild isActive={isActive("/tenants")}>
+                <Link href="/tenants">
+                  <Crown className="mr-2 size-4" />
+                  Tenants
+                </Link>
               </SidebarMenuButton>
             </SidebarMenuItem>
             <SidebarMenuItem>
-              <Link href="/api-keys" className="w-full">
-                <SidebarMenuButton>
+              <SidebarMenuButton asChild isActive={isActive("/api")}>
+                <Link href="/api">
                   <KeyRound className="mr-2 size-4" />
                   API Keys
-                </SidebarMenuButton>
-              </Link>
+                </Link>
+              </SidebarMenuButton>
             </SidebarMenuItem>
             <SidebarMenuItem>
-              <SidebarMenuButton>
-                <Settings className="mr-2 size-4" />
-                Admin Settings
+              <SidebarMenuButton asChild isActive={isActive("/billing")}>
+                <Link href="/billing">
+                  <CreditCard className="mr-2 size-4" />
+                  Billing
+                </Link>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            <SidebarMenuItem>
+              <SidebarMenuButton asChild isActive={isActive("/admin-settings")}>
+                <Link href="/admin-settings">
+                  <Settings className="mr-2 size-4" />
+                  Admin Settings
+                </Link>
               </SidebarMenuButton>
             </SidebarMenuItem>
           </SidebarMenu>
@@ -178,77 +255,23 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       </SidebarContent>
 
       <SidebarFooter className="p-4">
-        <div className="bg-muted rounded-xl p-3 mb-4">
-          <div className="flex items-center gap-3">
-            <div className="bg-orange-500/20 text-orange-500 p-2 rounded-lg">
-              <Crown className="size-4" />
-            </div>
-            <div className="flex flex-col text-sm">
-              <span className="font-semibold">Upgrade to Pro</span>
-              <span className="text-xs text-muted-foreground">Get Production Reliability</span>
-            </div>
-          </div>
-        </div>
         <SidebarMenu>
           <SidebarMenuItem>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <SidebarMenuButton
-                  size="lg"
-                  className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
-                >
-                  <Avatar className="h-8 w-8 rounded-md">
-                    <AvatarFallback className="bg-amber-600 text-white rounded-md text-xs font-bold">T</AvatarFallback>
-                  </Avatar>
-                  <div className="grid flex-1 text-left text-sm leading-tight ml-2">
-                    <span className="truncate font-semibold text-foreground">Tishyaketh</span>
-                    <span className="truncate text-xs text-muted-foreground">tishyaketh@cosavu...</span>
-                  </div>
-                  <ChevronDown className="ml-auto size-4" />
-                </SidebarMenuButton>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent
-                className="w-[--radix-dropdown-menu-trigger-width] min-w-56 rounded-lg"
-                side={props.side === "right" ? "left" : "right"}
-                align="end"
-                sideOffset={4}
-              >
-                <DropdownMenuLabel className="p-0 font-normal">
-                  <div className="flex items-center gap-2 px-1 py-1.5 text-left text-sm">
-                    <Avatar className="h-8 w-8 rounded-lg">
-                      <AvatarFallback className="bg-amber-600 text-white rounded-lg">T</AvatarFallback>
-                    </Avatar>
-                    <div className="grid flex-1 text-left text-sm leading-tight">
-                      <span className="truncate font-semibold">Tishyaketh</span>
-                      <span className="truncate text-xs text-muted-foreground">tishyaketh@cosavu.com</span>
-                    </div>
-                  </div>
-                </DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem className="gap-2">
-                  <Sparkles className="size-4" />
-                  Upgrade to Pro
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem className="gap-2">
-                  <UserIcon className="size-4" />
-                  Account
-                </DropdownMenuItem>
-                <DropdownMenuItem className="gap-2">
-                  <CreditCard className="size-4" />
-                  Billing
-                </DropdownMenuItem>
-                <DropdownMenuItem className="gap-2">
-                  <Bell className="size-4" />
-                  Notifications
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem className="gap-2">
-                  <LogOut className="size-4" />
-                  Log out
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+            <div className="flex h-14 items-center gap-3 rounded-sm px-3 text-sm">
+              <Avatar className="h-8 w-8 rounded-md">
+                <AvatarFallback className="rounded-md bg-amber-600 text-xs font-bold text-white">
+                  {profileInitial}
+                </AvatarFallback>
+              </Avatar>
+              <div className="grid min-w-0 flex-1 text-left text-sm leading-tight">
+                <span className="truncate font-semibold text-foreground">
+                  {profileName}
+                </span>
+                <span className="truncate text-xs text-muted-foreground">
+                  {profileEmail}
+                </span>
+              </div>
+            </div>
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarFooter>
