@@ -237,9 +237,9 @@ function createDefaultContextRuns(email?: string | null) {
       route: `POST ${COSAVU_ENDPOINTS.stan.optimize}`,
       modelTier: "cosavu-large",
       status: "optimized",
-      requestCount: 8_400_000,
-      originalTokens: 2252,
-      optimizedTokens: 203,
+      requestCount: 8_403_217,
+      originalTokens: 2253,
+      optimizedTokens: 204,
       unoptimizedLatencyMs: 1240,
       optimizedLatencyMs: 318,
       stanInferenceMs: 9,
@@ -255,8 +255,8 @@ function createDefaultContextRuns(email?: string | null) {
       blocks: [
         {
           blockType: "IDENTITY",
-          originalTokens: 122,
-          optimizedTokens: 54,
+          originalTokens: 123,
+          optimizedTokens: 55,
         },
         {
           blockType: "CONTEXT",

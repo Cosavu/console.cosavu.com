@@ -245,7 +245,7 @@ function createDefaultSystemLogs(email?: string | null) {
       durationMs: 52,
       message: "High-volume query traffic completed",
       details: "Synthetic rollup for the demo account.",
-      eventCount: 88_420_000,
+      eventCount: 88_420_137,
     },
     {
       id: "demo-log-million-storage",
@@ -261,23 +261,23 @@ function createDefaultSystemLogs(email?: string | null) {
       durationMs: 118,
       message: "Large indexing queue is draining",
       details: "Synthetic storage pressure rollup for the demo account.",
-      eventCount: 4_820_000,
+      eventCount: 4_823_119,
     },
     {
       id: "demo-log-million-errors",
       timestamp: now,
-      level: "error",
+      level: "warning",
       source: "engine",
       logger: "cosavu.engine.retry",
       route: `POST ${COSAVU_ENDPOINTS.stan.optimize}`,
       tenant: "enterprise-scale",
       actor,
       requestId: "req_demo_log_retry",
-      statusCode: 503,
-      durationMs: 330,
-      message: "Retryable optimization failures",
-      details: "Synthetic retry rollup for the demo account.",
-      eventCount: 920_000,
+      statusCode: 202,
+      durationMs: 327,
+      message: "Optimization retries resolved",
+      details: "Synthetic retry recovery rollup for the demo account.",
+      eventCount: 927_413,
     },
   ] satisfies LogEvent[]
 }
@@ -299,6 +299,7 @@ export default function SystemLogsPage() {
   const [sourceFilter, setSourceFilter] = useState("all")
   const [timeFilter, setTimeFilter] = useState("24h")
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const demoStatsActive = isDemoStatsUser(user?.email)
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => setMounted(true))
@@ -311,6 +312,9 @@ export default function SystemLogsPage() {
 
     return () => window.clearInterval(interval)
   }, [])
+
+  const effectiveLevelFilter =
+    demoStatsActive && levelFilter === "error" ? "all" : levelFilter
 
   useEffect(() => {
     const unsubscribe = watchConsoleAuth((currentUser) => {
@@ -357,7 +361,8 @@ export default function SystemLogsPage() {
         : clockNow - timeOption.minutes * 60 * 1000
 
     return logs.filter((log) => {
-      const matchesLevel = levelFilter === "all" || log.level === levelFilter
+      const matchesLevel =
+        effectiveLevelFilter === "all" || log.level === effectiveLevelFilter
       const matchesSource =
         sourceFilter === "all" || log.source === sourceFilter
       const matchesTime = !cutoff || new Date(log.timestamp).getTime() >= cutoff
@@ -370,7 +375,7 @@ export default function SystemLogsPage() {
 
       return matchesLevel && matchesSource && matchesTime && matchesQuery
     })
-  }, [clockNow, levelFilter, logs, query, sourceFilter, timeFilter])
+  }, [clockNow, effectiveLevelFilter, logs, query, sourceFilter, timeFilter])
 
   const selectedLog = useMemo(() => {
     return (
@@ -596,12 +601,14 @@ export default function SystemLogsPage() {
                   <div className="rounded-sm bg-muted/30 p-4">
                     <div className="mb-3 flex items-center justify-between">
                       <span className="text-sm text-muted-foreground">
-                        Errors
+                        {demoStatsActive ? "Warnings" : "Errors"}
                       </span>
                       <AlertTriangle className="size-4 text-muted-foreground" />
                     </div>
                     <p className="text-2xl font-semibold">
-                      {formatNumber(stats.errors)}
+                      {formatNumber(
+                        demoStatsActive ? stats.warnings : stats.errors
+                      )}
                     </p>
                   </div>
                   <div className="rounded-sm bg-muted/30 p-4">
@@ -704,7 +711,7 @@ export default function SystemLogsPage() {
                       </Select>
                     </div>
                     <Tabs
-                      value={levelFilter}
+                      value={effectiveLevelFilter}
                       onValueChange={setLevelFilter}
                       className="w-full"
                     >
@@ -712,9 +719,11 @@ export default function SystemLogsPage() {
                         <TabsTrigger className="rounded-sm" value="all">
                           All
                         </TabsTrigger>
-                        <TabsTrigger className="rounded-sm" value="error">
-                          Error
-                        </TabsTrigger>
+                        {!demoStatsActive && (
+                          <TabsTrigger className="rounded-sm" value="error">
+                            Error
+                          </TabsTrigger>
+                        )}
                         <TabsTrigger className="rounded-sm" value="warning">
                           Warn
                         </TabsTrigger>

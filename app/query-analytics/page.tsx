@@ -225,7 +225,7 @@ function createDefaultQueryEvents(email?: string | null) {
       car1LatencyMs: 14,
       totalMs: 52,
       status: "success",
-      requestCount: 932_481_220,
+      requestCount: 932_481_227,
     },
     {
       id: "demo-query-archive-errors",
@@ -233,7 +233,7 @@ function createDefaultQueryEvents(email?: string | null) {
       tenant: "enterprise-scale",
       actor,
       apiKey: "csvu_demo_million_scale",
-      requestId: "req_demo_archive_errors",
+      requestId: "req_demo_archive_retries",
       route: `POST ${COSAVU_ENDPOINTS.data.query}`,
       query: "Scan delayed archive partitions",
       system: "car-1",
@@ -247,8 +247,8 @@ function createDefaultQueryEvents(email?: string | null) {
       dbLatencyMs: 46,
       car1LatencyMs: 18,
       totalMs: 64,
-      status: "error",
-      requestCount: 2_180_000,
+      status: "success",
+      requestCount: 2_183_419,
     },
   ] satisfies QueryEvent[]
 }
