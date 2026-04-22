@@ -494,7 +494,7 @@ export default function Dashboard() {
       setOverview(localOverview)
 
       try {
-        const liveStats = await fetchConsoleStats()
+        const liveStats = await fetchConsoleStats(currentUser.email)
         setOverview(
           applyConsoleStatsToOverview(
             localOverview,

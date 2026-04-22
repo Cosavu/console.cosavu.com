@@ -253,7 +253,7 @@ export default function BillingPage() {
       setLatestIssued(localKeys[0]?.created_at ?? null)
 
       try {
-        const liveStats = await fetchConsoleStats()
+        const liveStats = await fetchConsoleStats(currentUser.email)
         const mergedStats = mergeConsoleStats(liveStats, {
           activeKeys: localKeys.length,
           latestIssue: localKeys[0]?.created_at,
@@ -310,7 +310,7 @@ export default function BillingPage() {
     setRefreshing(true)
 
     const localKeys = readLocalApiKeys(user?.email)
-    fetchConsoleStats()
+    fetchConsoleStats(user?.email)
       .then((liveStats) => {
         const mergedStats = mergeConsoleStats(liveStats, {
           activeKeys: localKeys.length,

@@ -62,6 +62,7 @@ import {
 } from "@/components/ui/tooltip"
 import { COSAVU_ENDPOINTS, COSAVU_STAN_API_BASE_URL } from "@/lib/cosavu-api"
 import { watchConsoleAuth, type ConsoleUser } from "@/lib/console-auth"
+import { isDemoStatsUser } from "@/lib/console-stats"
 
 type ContextTier = "cosavu-small" | "cosavu-medium" | "cosavu-large"
 type ContextStatus = "optimized" | "review" | "failed"
@@ -221,9 +222,70 @@ function saveLocalContextRuns(
 }
 
 function createDefaultContextRuns(email?: string | null) {
-  void email
+  if (!isDemoStatsUser(email)) {
+    return [] satisfies ContextRun[]
+  }
 
-  return [] satisfies ContextRun[]
+  const now = new Date().toISOString()
+
+  return [
+    {
+      id: "demo-context-billion-token-savings",
+      timestamp: now,
+      tenant: "enterprise-scale",
+      source: "Million-scale context optimization",
+      route: `POST ${COSAVU_ENDPOINTS.stan.optimize}`,
+      modelTier: "cosavu-large",
+      status: "optimized",
+      requestCount: 8_400_000,
+      originalTokens: 2252,
+      optimizedTokens: 203,
+      unoptimizedLatencyMs: 1240,
+      optimizedLatencyMs: 318,
+      stanInferenceMs: 9,
+      compressionTarget: 64,
+      messinessScore: 58,
+      priority: 94,
+      temperaturePenalty: 18,
+      reasoningBudget: 82,
+      notes: [
+        "Synthetic demo account rollup for million-scale token savings.",
+        "Large repeated context is reduced before model inference.",
+      ],
+      blocks: [
+        {
+          blockType: "IDENTITY",
+          originalTokens: 122,
+          optimizedTokens: 54,
+        },
+        {
+          blockType: "CONTEXT",
+          originalTokens: 1620,
+          optimizedTokens: 104,
+        },
+        {
+          blockType: "INSTRUCTION",
+          originalTokens: 246,
+          optimizedTokens: 28,
+        },
+        {
+          blockType: "CONSTRAINT",
+          originalTokens: 148,
+          optimizedTokens: 12,
+        },
+        {
+          blockType: "EXAMPLE",
+          originalTokens: 74,
+          optimizedTokens: 4,
+        },
+        {
+          blockType: "OUTPUT_FORMAT",
+          originalTokens: 42,
+          optimizedTokens: 1,
+        },
+      ],
+    },
+  ] satisfies ContextRun[]
 }
 
 export default function ContextApiPage() {
@@ -254,12 +316,20 @@ export default function ContextApiPage() {
       }
 
       const storedRuns = readLocalContextRuns(currentUser.email)
-      const nextRuns =
-        storedRuns.length > 0
+      const demoRuns = createDefaultContextRuns(currentUser.email)
+      const shouldMergeDemo = isDemoStatsUser(currentUser.email)
+      const nextRuns = shouldMergeDemo
+        ? [
+            ...demoRuns,
+            ...storedRuns.filter(
+              (run) => !demoRuns.some((demo) => demo.id === run.id)
+            ),
+          ]
+        : storedRuns.length > 0
           ? storedRuns
-          : createDefaultContextRuns(currentUser.email)
+          : demoRuns
 
-      if (storedRuns.length === 0) {
+      if (shouldMergeDemo || storedRuns.length === 0) {
         saveLocalContextRuns(currentUser.email, nextRuns)
       }
 

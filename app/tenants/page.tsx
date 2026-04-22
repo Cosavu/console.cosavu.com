@@ -82,6 +82,7 @@ import {
   saveLocalDataTenantKey,
 } from "@/lib/cosavu-api"
 import { watchConsoleAuth, type ConsoleUser } from "@/lib/console-auth"
+import { isDemoStatsUser } from "@/lib/console-stats"
 
 type TenantMode = "upload-api" | "warehouse" | "hybrid"
 type TenantStatus = "active" | "syncing" | "attention"
@@ -157,10 +158,49 @@ function getLocalApiKeyCount(email?: string | null) {
 }
 
 function createDefaultTenants(email?: string | null, keyCount = 0) {
-  void email
-  void keyCount
+  if (!isDemoStatsUser(email)) {
+    return [] satisfies TenantRecord[]
+  }
 
-  return [] satisfies TenantRecord[]
+  const ownerEmail = email || "workspace@cosavu.com"
+  const now = new Date().toISOString()
+
+  return [
+    {
+      id: "demo-tenant-enterprise-scale",
+      name: "Enterprise Scale Workspace",
+      slug: "enterprise-scale",
+      status: "active",
+      mode: "hybrid",
+      region: "us-east-1",
+      ownerEmail,
+      createdAt: now,
+      apiKeys: Math.max(keyCount, 1842),
+      warehouses: 512,
+      files: 64_820_440,
+      chunks: 984_220_118,
+      lastActivity: now,
+      defaultSystem: "car-0",
+      hardIsolation: true,
+    },
+    {
+      id: "demo-tenant-dataman-production",
+      name: "Dataman Production",
+      slug: "dataman-production",
+      status: "syncing",
+      mode: "warehouse",
+      region: "ap-south-1",
+      ownerEmail,
+      createdAt: now,
+      apiKeys: 420,
+      warehouses: 184,
+      files: 18_730_000,
+      chunks: 342_880_400,
+      lastActivity: now,
+      defaultSystem: "car-1",
+      hardIsolation: true,
+    },
+  ] satisfies TenantRecord[]
 }
 
 function readLocalTenants(email?: string | null) {
@@ -288,12 +328,20 @@ export default function TenantsPage() {
 
       const keyCount = getLocalApiKeyCount(currentUser.email)
       const storedTenants = readLocalTenants(currentUser.email)
-      const nextTenants =
-        storedTenants.length > 0
+      const demoTenants = createDefaultTenants(currentUser.email, keyCount)
+      const shouldMergeDemo = isDemoStatsUser(currentUser.email)
+      const nextTenants = shouldMergeDemo
+        ? [
+            ...demoTenants,
+            ...storedTenants.filter(
+              (tenant) => !demoTenants.some((demo) => demo.id === tenant.id)
+            ),
+          ]
+        : storedTenants.length > 0
           ? storedTenants
-          : createDefaultTenants(currentUser.email, keyCount)
+          : demoTenants
 
-      if (storedTenants.length === 0) {
+      if (shouldMergeDemo || storedTenants.length === 0) {
         saveLocalTenants(currentUser.email, nextTenants)
       }
 
@@ -344,6 +392,24 @@ export default function TenantsPage() {
 
   const refreshTenants = async () => {
     setRefreshing(true)
+
+    if (isDemoStatsUser(user?.email)) {
+      const keyCount = getLocalApiKeyCount(user?.email)
+      const storedTenants = readLocalTenants(user?.email)
+      const demoTenants = createDefaultTenants(user?.email, keyCount)
+      const nextTenants = [
+        ...demoTenants,
+        ...storedTenants.filter(
+          (tenant) => !demoTenants.some((demo) => demo.id === tenant.id)
+        ),
+      ]
+
+      saveLocalTenants(user?.email, nextTenants)
+      setTenants(nextTenants)
+      setSelectedTenantId((currentId) => currentId || nextTenants[0]?.id)
+      window.setTimeout(() => setRefreshing(false), 650)
+      return
+    }
 
     try {
       const realTenants = await listDataTenants()

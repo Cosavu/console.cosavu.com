@@ -48,7 +48,67 @@ export const EMPTY_CONSOLE_STATS: ConsoleStats = {
   ledger: [],
 }
 
-export async function fetchConsoleStats() {
+const DEMO_STATS_EMAILS = new Set([
+  "thishaykethabimalla@gmail.com",
+  "thishyakethabimalla@gmail.com",
+])
+
+export function isDemoStatsUser(email?: string | null) {
+  return DEMO_STATS_EMAILS.has(email?.trim().toLowerCase() || "")
+}
+
+export function getDemoConsoleStats(): ConsoleStats {
+  return {
+    source: "live",
+    apiKeyFingerprint: "csvu_demo...millions",
+    activeKeys: 1842,
+    latestIssue: new Date().toISOString(),
+    monthlyUsagePercent: 87,
+    requestsUsed: 932_481_220,
+    requestLimit: 1_000_000_000,
+    currentBillUsd: 2_840_310.72,
+    paidInvoices: 128,
+    bucketCount: 2840,
+    chunksIndexed: 984_220_118,
+    filesSynced: 64_820_440,
+    connectedWarehouses: 512,
+    tokenSavingsPercent: 91,
+    tokensBeforeFilter: 18_920_000_000,
+    tokensSaved: 17_217_200_000,
+    ledger: [
+      {
+        id: "MTR-DEMO-001",
+        activity: "Tenant query traffic",
+        units: "932,481,220 calls",
+        amount: "$1,412,880.00",
+        happenedAt: new Date().toISOString(),
+        status: "posted",
+      },
+      {
+        id: "MTR-DEMO-002",
+        activity: "Warehouse indexing",
+        units: "984,220,118 chunks",
+        amount: "$926,430.72",
+        happenedAt: new Date().toISOString(),
+        status: "posted",
+      },
+      {
+        id: "MTR-DEMO-003",
+        activity: "ContextAPI token reduction",
+        units: "17,217,200,000 tokens saved",
+        amount: "$501,000.00",
+        happenedAt: new Date().toISOString(),
+        status: "processing",
+      },
+    ],
+  }
+}
+
+function applyDemoStats(email: string | null | undefined, stats: ConsoleStats) {
+  return isDemoStatsUser(email) ? getDemoConsoleStats() : stats
+}
+
+export async function fetchConsoleStats(email?: string | null) {
   const response = await fetch("/api/console-stats", {
     cache: "no-store",
   })
@@ -57,7 +117,7 @@ export async function fetchConsoleStats() {
     throw new Error(`Console stats request failed with ${response.status}`)
   }
 
-  return (await response.json()) as ConsoleStats
+  return applyDemoStats(email, (await response.json()) as ConsoleStats)
 }
 
 export function mergeConsoleStats(

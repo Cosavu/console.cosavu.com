@@ -305,7 +305,7 @@ export default function ApiPage() {
       await fetchKeys(currentUser.email)
 
       try {
-        const liveStats = await fetchConsoleStats()
+        const liveStats = await fetchConsoleStats(currentUser.email)
         setUsageStats(
           mergeConsoleStats(liveStats, {
             activeKeys: readLocalApiKeys(currentUser.email).length,

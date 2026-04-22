@@ -62,6 +62,7 @@ import {
 } from "@/components/ui/tooltip"
 import { COSAVU_DATA_API_BASE_URL, COSAVU_ENDPOINTS } from "@/lib/cosavu-api"
 import { watchConsoleAuth, type ConsoleUser } from "@/lib/console-auth"
+import { isDemoStatsUser } from "@/lib/console-stats"
 
 type QuerySystem = "car-0" | "car-1"
 type QueryStatus = "success" | "empty" | "error"
@@ -87,6 +88,7 @@ type QueryEvent = {
   car1LatencyMs: number
   totalMs: number
   status: QueryStatus
+  requestCount?: number
 }
 
 const LOCAL_QUERY_ANALYTICS_STORAGE_PREFIX = "cosavu:query-analytics"
@@ -194,9 +196,61 @@ function percentile(values: number[], percentileValue: number) {
 }
 
 function createDefaultQueryEvents(email?: string | null) {
-  void email
+  if (!isDemoStatsUser(email)) {
+    return [] satisfies QueryEvent[]
+  }
 
-  return [] satisfies QueryEvent[]
+  const now = new Date().toISOString()
+  const actor = email || "workspace@cosavu.com"
+
+  return [
+    {
+      id: "demo-query-million-scale",
+      timestamp: now,
+      tenant: "enterprise-scale",
+      actor,
+      apiKey: "csvu_demo_million_scale",
+      requestId: "req_demo_million_scale",
+      route: `POST ${COSAVU_ENDPOINTS.data.query}`,
+      query: "Find revenue-critical context across all production documents",
+      system: "car-0",
+      collection: "million-scale-knowledge-lake",
+      topK: 12,
+      cosavuCandidates: 64,
+      car1Threshold: 0.48,
+      candidateCount: 64,
+      retainedCount: 42,
+      returnedCount: 12,
+      dbLatencyMs: 38,
+      car1LatencyMs: 14,
+      totalMs: 52,
+      status: "success",
+      requestCount: 932_481_220,
+    },
+    {
+      id: "demo-query-archive-errors",
+      timestamp: now,
+      tenant: "enterprise-scale",
+      actor,
+      apiKey: "csvu_demo_million_scale",
+      requestId: "req_demo_archive_errors",
+      route: `POST ${COSAVU_ENDPOINTS.data.query}`,
+      query: "Scan delayed archive partitions",
+      system: "car-1",
+      collection: "retrieval-archive",
+      topK: 8,
+      cosavuCandidates: 32,
+      car1Threshold: 0.5,
+      candidateCount: 32,
+      retainedCount: 21,
+      returnedCount: 8,
+      dbLatencyMs: 46,
+      car1LatencyMs: 18,
+      totalMs: 64,
+      status: "error",
+      requestCount: 2_180_000,
+    },
+  ] satisfies QueryEvent[]
 }
 
 export default function QueryAnalyticsPage() {
@@ -236,12 +290,20 @@ export default function QueryAnalyticsPage() {
       }
 
       const storedEvents = readLocalQueryEvents(currentUser.email)
-      const nextEvents =
-        storedEvents.length > 0
+      const demoEvents = createDefaultQueryEvents(currentUser.email)
+      const shouldMergeDemo = isDemoStatsUser(currentUser.email)
+      const nextEvents = shouldMergeDemo
+        ? [
+            ...demoEvents,
+            ...storedEvents.filter(
+              (event) => !demoEvents.some((demo) => demo.id === event.id)
+            ),
+          ]
+        : storedEvents.length > 0
           ? storedEvents
-          : createDefaultQueryEvents(currentUser.email)
+          : demoEvents
 
-      if (storedEvents.length === 0) {
+      if (shouldMergeDemo || storedEvents.length === 0) {
         saveLocalQueryEvents(currentUser.email, nextEvents)
       }
 
@@ -301,19 +363,28 @@ export default function QueryAnalyticsPage() {
   }, [events, filteredEvents, selectedEventId])
 
   const stats = useMemo(() => {
-    const totalQueries = filteredEvents.length
-    const successfulQueries = filteredEvents.filter(
-      (event) => event.status === "success"
-    ).length
-    const errorQueries = filteredEvents.filter(
-      (event) => event.status === "error"
-    ).length
+    const totalQueries = filteredEvents.reduce(
+      (sum, event) => sum + (event.requestCount ?? 1),
+      0
+    )
+    const successfulQueries = filteredEvents.reduce(
+      (sum, event) =>
+        sum + (event.status === "success" ? (event.requestCount ?? 1) : 0),
+      0
+    )
+    const errorQueries = filteredEvents.reduce(
+      (sum, event) =>
+        sum + (event.status === "error" ? (event.requestCount ?? 1) : 0),
+      0
+    )
     const averageLatency =
       totalQueries === 0
         ? 0
         : Math.round(
-            filteredEvents.reduce((sum, event) => sum + event.totalMs, 0) /
-              totalQueries
+            filteredEvents.reduce(
+              (sum, event) => sum + event.totalMs * (event.requestCount ?? 1),
+              0
+            ) / totalQueries
           )
     const p95Latency = Math.round(
       percentile(
@@ -328,7 +399,11 @@ export default function QueryAnalyticsPage() {
             (filteredEvents.reduce((sum, event) => {
               if (event.candidateCount === 0) return sum
 
-              return sum + event.retainedCount / event.candidateCount
+              return (
+                sum +
+                (event.retainedCount / event.candidateCount) *
+                  (event.requestCount ?? 1)
+              )
             }, 0) /
               totalQueries) *
               100
@@ -355,29 +430,39 @@ export default function QueryAnalyticsPage() {
       const systemEvents = filteredEvents.filter(
         (event) => event.system === system
       )
+      const systemCount = systemEvents.reduce(
+        (sum, event) => sum + (event.requestCount ?? 1),
+        0
+      )
       const avgLatency =
-        systemEvents.length === 0
+        systemCount === 0
           ? 0
           : Math.round(
-              systemEvents.reduce((sum, event) => sum + event.totalMs, 0) /
-                systemEvents.length
+              systemEvents.reduce(
+                (sum, event) => sum + event.totalMs * (event.requestCount ?? 1),
+                0
+              ) / systemCount
             )
       const avgRetention =
-        systemEvents.length === 0
+        systemCount === 0
           ? 0
           : Math.round(
               (systemEvents.reduce((sum, event) => {
                 if (event.candidateCount === 0) return sum
 
-                return sum + event.retainedCount / event.candidateCount
+                return (
+                  sum +
+                  (event.retainedCount / event.candidateCount) *
+                    (event.requestCount ?? 1)
+                )
               }, 0) /
-                systemEvents.length) *
+                systemCount) *
                 100
             )
 
       return {
         system,
-        count: systemEvents.length,
+        count: systemCount,
         avgLatency,
         avgRetention,
       }
@@ -393,15 +478,23 @@ export default function QueryAnalyticsPage() {
 
         return {
           collection,
-          count: collectionEvents.length,
+          count: collectionEvents.reduce(
+            (sum, event) => sum + (event.requestCount ?? 1),
+            0
+          ),
           latency:
             collectionEvents.length === 0
               ? 0
               : Math.round(
                   collectionEvents.reduce(
-                    (sum, event) => sum + event.totalMs,
+                    (sum, event) =>
+                      sum + event.totalMs * (event.requestCount ?? 1),
                     0
-                  ) / collectionEvents.length
+                  ) /
+                    collectionEvents.reduce(
+                      (sum, event) => sum + (event.requestCount ?? 1),
+                      0
+                    )
                 ),
         }
       })

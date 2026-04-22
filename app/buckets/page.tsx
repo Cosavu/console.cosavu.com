@@ -87,6 +87,7 @@ import {
   uploadDataFile,
 } from "@/lib/cosavu-api"
 import { watchConsoleAuth, type ConsoleUser } from "@/lib/console-auth"
+import { isDemoStatsUser } from "@/lib/console-stats"
 
 type BucketSystem = "car-0" | "car-1"
 type BucketStatus = "ready" | "indexing" | "attention"
@@ -275,12 +276,69 @@ function saveLocalBucketFiles(
 }
 
 function createDefaultBuckets(email?: string | null) {
-  void email
-
-  return { buckets: [], files: [] } satisfies {
-    buckets: BucketRecord[]
-    files: BucketFile[]
+  if (!isDemoStatsUser(email)) {
+    return { buckets: [], files: [] } satisfies {
+      buckets: BucketRecord[]
+      files: BucketFile[]
+    }
   }
+
+  const now = new Date().toISOString()
+  const ownerEmail = email || "workspace@cosavu.com"
+  const tenantSlug = getTenantSlug(email)
+
+  const buckets: BucketRecord[] = [
+    {
+      id: "demo-million-scale-primary",
+      name: "Million scale knowledge lake",
+      s3Bucket: `cosavu-private-${tenantSlug}-million-scale`,
+      s3Prefix: `${tenantSlug}/million-scale/`,
+      region: "us-east-1",
+      system: "car-0",
+      status: "ready",
+      ownerEmail,
+      createdAt: now,
+      updatedAt: now,
+      fileCount: 64_820_440,
+      totalBytes: 8_420_000_000_000_000,
+      chunksIndexed: 984_220_118,
+      encryption: "SSE-KMS",
+      retentionDays: 365,
+    },
+    {
+      id: "demo-retrieval-archive",
+      name: "Retrieval archive",
+      s3Bucket: `cosavu-private-${tenantSlug}-retrieval-archive`,
+      s3Prefix: `${tenantSlug}/retrieval-archive/`,
+      region: "ap-south-1",
+      system: "car-1",
+      status: "indexing",
+      ownerEmail,
+      createdAt: now,
+      updatedAt: now,
+      fileCount: 18_730_000,
+      totalBytes: 2_180_000_000_000_000,
+      chunksIndexed: 342_880_400,
+      encryption: "SSE-KMS",
+      retentionDays: 180,
+    },
+  ]
+
+  const files: BucketFile[] = [
+    {
+      id: "demo-million-rollup",
+      bucketId: "demo-million-scale-primary",
+      name: "million-scale-rollup.parquet",
+      size: 920_000_000_000,
+      type: "application/octet-stream",
+      s3Key: `${tenantSlug}/million-scale/demo-million-rollup/million-scale-rollup.parquet`,
+      chunksIndexed: 42_800_000,
+      uploadedAt: now,
+      status: "indexed",
+    },
+  ]
+
+  return { buckets, files }
 }
 
 function getStatusVariant(status: BucketStatus) {
@@ -330,15 +388,34 @@ export default function BucketsPage() {
       const storedBuckets = readLocalBuckets(currentUser.email)
       const storedFiles = readLocalBucketFiles(currentUser.email)
       const defaults = createDefaultBuckets(currentUser.email)
-      const nextBuckets =
-        storedBuckets.length > 0 ? storedBuckets : defaults.buckets
-      const nextFiles = storedFiles.length > 0 ? storedFiles : defaults.files
+      const shouldMergeDemo = isDemoStatsUser(currentUser.email)
+      const nextBuckets = shouldMergeDemo
+        ? [
+            ...defaults.buckets,
+            ...storedBuckets.filter(
+              (bucket) =>
+                !defaults.buckets.some((demo) => demo.id === bucket.id)
+            ),
+          ]
+        : storedBuckets.length > 0
+          ? storedBuckets
+          : defaults.buckets
+      const nextFiles = shouldMergeDemo
+        ? [
+            ...defaults.files,
+            ...storedFiles.filter(
+              (file) => !defaults.files.some((demo) => demo.id === file.id)
+            ),
+          ]
+        : storedFiles.length > 0
+          ? storedFiles
+          : defaults.files
 
-      if (storedBuckets.length === 0) {
+      if (shouldMergeDemo || storedBuckets.length === 0) {
         saveLocalBuckets(currentUser.email, nextBuckets)
       }
 
-      if (storedFiles.length === 0) {
+      if (shouldMergeDemo || storedFiles.length === 0) {
         saveLocalBucketFiles(currentUser.email, nextFiles)
       }
 
@@ -403,6 +480,32 @@ export default function BucketsPage() {
 
   const refreshBuckets = async () => {
     setRefreshing(true)
+
+    if (isDemoStatsUser(user?.email)) {
+      const storedBuckets = readLocalBuckets(user?.email)
+      const storedFiles = readLocalBucketFiles(user?.email)
+      const defaults = createDefaultBuckets(user?.email)
+      const nextBuckets = [
+        ...defaults.buckets,
+        ...storedBuckets.filter(
+          (bucket) => !defaults.buckets.some((demo) => demo.id === bucket.id)
+        ),
+      ]
+      const nextFiles = [
+        ...defaults.files,
+        ...storedFiles.filter(
+          (file) => !defaults.files.some((demo) => demo.id === file.id)
+        ),
+      ]
+
+      saveLocalBuckets(user?.email, nextBuckets)
+      saveLocalBucketFiles(user?.email, nextFiles)
+      setBuckets(nextBuckets)
+      setBucketFiles(nextFiles)
+      setSelectedBucketId((currentId) => currentId || nextBuckets[0]?.id)
+      window.setTimeout(() => setRefreshing(false), 650)
+      return
+    }
 
     try {
       const dataTenantKey = getLatestDataTenantKey(user?.email)

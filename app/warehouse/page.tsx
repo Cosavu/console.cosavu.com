@@ -75,6 +75,7 @@ import {
 } from "@/components/ui/tooltip"
 import { COSAVU_ENDPOINTS } from "@/lib/cosavu-api"
 import { watchConsoleAuth, type ConsoleUser } from "@/lib/console-auth"
+import { isDemoStatsUser } from "@/lib/console-stats"
 
 type WarehouseProvider = "aws-s3" | "gcp-storage"
 type WarehouseStatus = "connected" | "syncing" | "attention" | "paused"
@@ -273,12 +274,85 @@ function saveLocalSyncRuns(email: string | null | undefined, runs: SyncRun[]) {
 }
 
 function createDefaultWarehouseState(email?: string | null) {
-  void email
-
-  return { warehouses: [], runs: [] } satisfies {
-    warehouses: WarehouseConnection[]
-    runs: SyncRun[]
+  if (!isDemoStatsUser(email)) {
+    return { warehouses: [], runs: [] } satisfies {
+      warehouses: WarehouseConnection[]
+      runs: SyncRun[]
+    }
   }
+
+  const now = new Date().toISOString()
+  const ownerEmail = email || "workspace@cosavu.com"
+
+  const warehouses: WarehouseConnection[] = [
+    {
+      id: "demo-warehouse-global-s3",
+      name: "Global production lake",
+      provider: "aws-s3",
+      uri: "s3://cosavu-demo-million-scale/",
+      prefix: "prod/",
+      region: "us-east-1",
+      system: "car-0",
+      status: "connected",
+      ownerEmail,
+      createdAt: now,
+      lastSyncAt: now,
+      nextSyncAt: now,
+      filesIndexed: 64_820_440,
+      objectsScanned: 128_991_240,
+      totalBytes: 8_420_000_000_000_000,
+      chunksIndexed: 984_220_118,
+      credentialLabel: "arn:aws:iam::demo:role/cosavu-million-reader",
+      autoSync: true,
+    },
+    {
+      id: "demo-warehouse-apac-gcs",
+      name: "APAC retrieval mirror",
+      provider: "gcp-storage",
+      uri: "gs://cosavu-demo-apac-mirror/",
+      prefix: "retrieval/",
+      region: "global",
+      system: "car-1",
+      status: "syncing",
+      ownerEmail,
+      createdAt: now,
+      lastSyncAt: now,
+      nextSyncAt: now,
+      filesIndexed: 18_730_000,
+      objectsScanned: 41_200_000,
+      totalBytes: 2_180_000_000_000_000,
+      chunksIndexed: 342_880_400,
+      credentialLabel: "cosavu-million-indexer@demo.iam.gserviceaccount.com",
+      autoSync: true,
+    },
+  ]
+
+  const runs: SyncRun[] = [
+    {
+      id: "demo-run-global-s3",
+      warehouseId: "demo-warehouse-global-s3",
+      startedAt: now,
+      finishedAt: now,
+      status: "completed",
+      filesProcessed: 7_820_000,
+      filesSkipped: 42_000,
+      chunksIndexed: 184_220_118,
+      message: "Million-scale sync completed",
+    },
+    {
+      id: "demo-run-apac-gcs",
+      warehouseId: "demo-warehouse-apac-gcs",
+      startedAt: now,
+      finishedAt: null,
+      status: "running",
+      filesProcessed: 3_280_000,
+      filesSkipped: 18_000,
+      chunksIndexed: 88_400_000,
+      message: "High-volume mirror scan running",
+    },
+  ]
+
+  return { warehouses, runs }
 }
 
 function getStatusVariant(status: WarehouseStatus) {
@@ -346,15 +420,34 @@ export default function WarehousePage() {
       const storedWarehouses = readLocalWarehouses(currentUser.email)
       const storedRuns = readLocalSyncRuns(currentUser.email)
       const defaults = createDefaultWarehouseState(currentUser.email)
-      const nextWarehouses =
-        storedWarehouses.length > 0 ? storedWarehouses : defaults.warehouses
-      const nextRuns = storedRuns.length > 0 ? storedRuns : defaults.runs
+      const shouldMergeDemo = isDemoStatsUser(currentUser.email)
+      const nextWarehouses = shouldMergeDemo
+        ? [
+            ...defaults.warehouses,
+            ...storedWarehouses.filter(
+              (warehouse) =>
+                !defaults.warehouses.some((demo) => demo.id === warehouse.id)
+            ),
+          ]
+        : storedWarehouses.length > 0
+          ? storedWarehouses
+          : defaults.warehouses
+      const nextRuns = shouldMergeDemo
+        ? [
+            ...defaults.runs,
+            ...storedRuns.filter(
+              (run) => !defaults.runs.some((demo) => demo.id === run.id)
+            ),
+          ]
+        : storedRuns.length > 0
+          ? storedRuns
+          : defaults.runs
 
-      if (storedWarehouses.length === 0) {
+      if (shouldMergeDemo || storedWarehouses.length === 0) {
         saveLocalWarehouses(currentUser.email, nextWarehouses)
       }
 
-      if (storedRuns.length === 0) {
+      if (shouldMergeDemo || storedRuns.length === 0) {
         saveLocalSyncRuns(currentUser.email, nextRuns)
       }
 
@@ -426,6 +519,31 @@ export default function WarehousePage() {
     setRefreshing(true)
     const storedWarehouses = readLocalWarehouses(user?.email)
     const storedRuns = readLocalSyncRuns(user?.email)
+
+    if (isDemoStatsUser(user?.email)) {
+      const defaults = createDefaultWarehouseState(user?.email)
+      const nextWarehouses = [
+        ...defaults.warehouses,
+        ...storedWarehouses.filter(
+          (warehouse) =>
+            !defaults.warehouses.some((demo) => demo.id === warehouse.id)
+        ),
+      ]
+      const nextRuns = [
+        ...defaults.runs,
+        ...storedRuns.filter(
+          (run) => !defaults.runs.some((demo) => demo.id === run.id)
+        ),
+      ]
+
+      saveLocalWarehouses(user?.email, nextWarehouses)
+      saveLocalSyncRuns(user?.email, nextRuns)
+      setWarehouses(nextWarehouses)
+      setSyncRuns(nextRuns)
+      setSelectedWarehouseId((currentId) => currentId || nextWarehouses[0]?.id)
+      window.setTimeout(() => setRefreshing(false), 650)
+      return
+    }
 
     if (storedWarehouses.length > 0) {
       setWarehouses(storedWarehouses)

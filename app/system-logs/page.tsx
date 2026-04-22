@@ -65,6 +65,7 @@ import {
 } from "@/components/ui/tooltip"
 import { COSAVU_ENDPOINTS } from "@/lib/cosavu-api"
 import { watchConsoleAuth, type ConsoleUser } from "@/lib/console-auth"
+import { isDemoStatsUser } from "@/lib/console-stats"
 
 type LogLevel = "info" | "warning" | "error" | "debug"
 type LogSource = "api" | "auth" | "engine" | "storage" | "warehouse" | "billing"
@@ -83,6 +84,7 @@ type LogEvent = {
   durationMs: number
   message: string
   details: string
+  eventCount?: number
 }
 
 const LOCAL_SYSTEM_LOGS_STORAGE_PREFIX = "cosavu:system-logs"
@@ -221,9 +223,63 @@ function saveLocalSystemLogs(
 }
 
 function createDefaultSystemLogs(email?: string | null) {
-  void email
+  if (!isDemoStatsUser(email)) {
+    return [] satisfies LogEvent[]
+  }
 
-  return [] satisfies LogEvent[]
+  const now = new Date().toISOString()
+  const actor = email || "workspace@cosavu.com"
+
+  return [
+    {
+      id: "demo-log-million-success",
+      timestamp: now,
+      level: "info",
+      source: "api",
+      logger: "cosavu.api.edge",
+      route: `POST ${COSAVU_ENDPOINTS.data.query}`,
+      tenant: "enterprise-scale",
+      actor,
+      requestId: "req_demo_log_million_success",
+      statusCode: 200,
+      durationMs: 52,
+      message: "High-volume query traffic completed",
+      details: "Synthetic rollup for the demo account.",
+      eventCount: 88_420_000,
+    },
+    {
+      id: "demo-log-million-storage",
+      timestamp: now,
+      level: "warning",
+      source: "storage",
+      logger: "cosavu.storage.indexer",
+      route: `POST ${COSAVU_ENDPOINTS.data.filesUpload}`,
+      tenant: "enterprise-scale",
+      actor,
+      requestId: "req_demo_log_storage",
+      statusCode: 202,
+      durationMs: 118,
+      message: "Large indexing queue is draining",
+      details: "Synthetic storage pressure rollup for the demo account.",
+      eventCount: 4_820_000,
+    },
+    {
+      id: "demo-log-million-errors",
+      timestamp: now,
+      level: "error",
+      source: "engine",
+      logger: "cosavu.engine.retry",
+      route: `POST ${COSAVU_ENDPOINTS.stan.optimize}`,
+      tenant: "enterprise-scale",
+      actor,
+      requestId: "req_demo_log_retry",
+      statusCode: 503,
+      durationMs: 330,
+      message: "Retryable optimization failures",
+      details: "Synthetic retry rollup for the demo account.",
+      eventCount: 920_000,
+    },
+  ] satisfies LogEvent[]
 }
 
 export default function SystemLogsPage() {
@@ -264,12 +320,20 @@ export default function SystemLogsPage() {
       }
 
       const storedLogs = readLocalSystemLogs(currentUser.email)
-      const nextLogs =
-        storedLogs.length > 0
+      const demoLogs = createDefaultSystemLogs(currentUser.email)
+      const shouldMergeDemo = isDemoStatsUser(currentUser.email)
+      const nextLogs = shouldMergeDemo
+        ? [
+            ...demoLogs,
+            ...storedLogs.filter(
+              (log) => !demoLogs.some((demo) => demo.id === log.id)
+            ),
+          ]
+        : storedLogs.length > 0
           ? storedLogs
-          : createDefaultSystemLogs(currentUser.email)
+          : demoLogs
 
-      if (storedLogs.length === 0) {
+      if (shouldMergeDemo || storedLogs.length === 0) {
         saveLocalSystemLogs(currentUser.email, nextLogs)
       }
 
@@ -315,23 +379,42 @@ export default function SystemLogsPage() {
   }, [filteredLogs, logs, selectedLogId])
 
   const stats = useMemo(() => {
-    const errors = logs.filter((log) => log.level === "error").length
-    const warnings = logs.filter((log) => log.level === "warning").length
+    const totalEvents = logs.reduce(
+      (sum, log) => sum + (log.eventCount ?? 1),
+      0
+    )
+    const errors = logs.reduce(
+      (sum, log) => sum + (log.level === "error" ? (log.eventCount ?? 1) : 0),
+      0
+    )
+    const warnings = logs.reduce(
+      (sum, log) => sum + (log.level === "warning" ? (log.eventCount ?? 1) : 0),
+      0
+    )
     const averageLatency =
-      logs.length === 0
+      totalEvents === 0
         ? 0
         : Math.round(
-            logs.reduce((sum, log) => sum + log.durationMs, 0) / logs.length
+            logs.reduce(
+              (sum, log) => sum + log.durationMs * (log.eventCount ?? 1),
+              0
+            ) / totalEvents
           )
     const successRate =
-      logs.length === 0
+      totalEvents === 0
         ? 100
         : Math.round(
-            (logs.filter((log) => log.statusCode < 400).length / logs.length) *
+            (logs.reduce(
+              (sum, log) =>
+                sum + (log.statusCode < 400 ? (log.eventCount ?? 1) : 0),
+              0
+            ) /
+              totalEvents) *
               100
           )
 
     return {
+      totalEvents,
       errors,
       warnings,
       averageLatency,
@@ -507,7 +590,7 @@ export default function SystemLogsPage() {
                       <List className="size-4 text-muted-foreground" />
                     </div>
                     <p className="text-2xl font-semibold">
-                      {formatNumber(logs.length)}
+                      {formatNumber(stats.totalEvents)}
                     </p>
                   </div>
                   <div className="rounded-sm bg-muted/30 p-4">
@@ -517,7 +600,9 @@ export default function SystemLogsPage() {
                       </span>
                       <AlertTriangle className="size-4 text-muted-foreground" />
                     </div>
-                    <p className="text-2xl font-semibold">{stats.errors}</p>
+                    <p className="text-2xl font-semibold">
+                      {formatNumber(stats.errors)}
+                    </p>
                   </div>
                   <div className="rounded-sm bg-muted/30 p-4">
                     <div className="mb-3 flex items-center justify-between">
