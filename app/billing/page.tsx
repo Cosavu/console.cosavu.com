@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
 import { useTheme } from "next-themes"
-import { onAuthStateChanged, type User } from "firebase/auth"
 import {
   Check,
   ChevronRight,
@@ -69,18 +68,18 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { watchConsoleAuth, type ConsoleUser } from "@/lib/console-auth"
+import {
+  EMPTY_CONSOLE_STATS,
+  fetchConsoleStats,
+  mergeConsoleStats,
+  type ConsoleStats,
+} from "@/lib/console-stats"
 import { COSAVU_ENDPOINTS } from "@/lib/cosavu-api"
-import { auth } from "@/lib/firebase"
 
 type ApiKeyRecord = {
   id: string
   created_at?: string | null
-}
-
-type TierUsage = {
-  tier: "cosavu-small" | "cosavu-medium" | "cosavu-large"
-  calls: number
-  share: number
 }
 
 type LedgerEntry = {
@@ -96,52 +95,6 @@ type PayoutCurrency = "USD" | "EUR" | "INR"
 type PaymentMethod = "upi" | "card"
 
 const LOCAL_API_KEYS_STORAGE_PREFIX = "cosavu:api-keys"
-const REQUESTS_THIS_MONTH = 1482
-const REQUEST_LIMIT = 5000
-const REQUEST_PERCENT = Math.round((REQUESTS_THIS_MONTH / REQUEST_LIMIT) * 100)
-const TOKENS_BEFORE_FILTER = 920_000
-const TOKENS_AFTER_FILTER = 368_000
-const TOKENS_SAVED = TOKENS_BEFORE_FILTER - TOKENS_AFTER_FILTER
-const TOKEN_SAVINGS_PERCENT = Math.round(
-  (TOKENS_SAVED / TOKENS_BEFORE_FILTER) * 100
-)
-const INDEXED_CHUNKS = 12_460
-const CONNECTED_WAREHOUSES = 2
-const FILES_SYNCED = 86
-
-const TIER_USAGE: TierUsage[] = [
-  { tier: "cosavu-small", calls: 1012, share: 68 },
-  { tier: "cosavu-medium", calls: 356, share: 24 },
-  { tier: "cosavu-large", calls: 114, share: 8 },
-]
-
-const LEDGER: LedgerEntry[] = [
-  {
-    id: "MTR-2026-0418-001",
-    activity: "Tenant query traffic",
-    units: "1,482 calls",
-    amount: "$92.40",
-    happenedAt: "2026-04-18T09:12:00.000Z",
-    status: "posted",
-  },
-  {
-    id: "MTR-2026-0415-004",
-    activity: "Warehouse sync indexing",
-    units: "3,216 chunks",
-    amount: "$18.10",
-    happenedAt: "2026-04-15T06:20:00.000Z",
-    status: "posted",
-  },
-  {
-    id: "MTR-2026-0412-010",
-    activity: "Prompt optimization traffic",
-    units: "278k tokens",
-    amount: "$21.35",
-    happenedAt: "2026-04-12T14:05:00.000Z",
-    status: "processing",
-  },
-]
-
 const PAYOUT_RATE_FROM_USD: Record<PayoutCurrency, number> = {
   USD: 1,
   EUR: 0.92,
@@ -269,9 +222,11 @@ export default function BillingPage() {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [user, setUser] = useState<User | null>(null)
+  const [user, setUser] = useState<ConsoleUser | null>(null)
   const [activeKeys, setActiveKeys] = useState(0)
   const [latestIssued, setLatestIssued] = useState<string | null>(null)
+  const [usageStats, setUsageStats] =
+    useState<ConsoleStats>(EMPTY_CONSOLE_STATS)
   const [billingEmail, setBillingEmail] = useState("")
   const [monthlySoftCap, setMonthlySoftCap] = useState("150")
   const [hardCapEnabled, setHardCapEnabled] = useState(true)
@@ -284,7 +239,7 @@ export default function BillingPage() {
   const [upiModalOpen, setUpiModalOpen] = useState(false)
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+    const unsubscribe = watchConsoleAuth(async (currentUser) => {
       if (!currentUser) {
         router.push("/login")
         return
@@ -296,6 +251,19 @@ export default function BillingPage() {
       const localKeys = readLocalApiKeys(currentUser.email)
       setActiveKeys(localKeys.length)
       setLatestIssued(localKeys[0]?.created_at ?? null)
+
+      try {
+        const liveStats = await fetchConsoleStats()
+        const mergedStats = mergeConsoleStats(liveStats, {
+          activeKeys: localKeys.length,
+          latestIssue: localKeys[0]?.created_at,
+        })
+        setUsageStats(mergedStats)
+        setActiveKeys(mergedStats.activeKeys)
+        setLatestIssued(mergedStats.latestIssue)
+      } catch {
+        setUsageStats(EMPTY_CONSOLE_STATS)
+      }
 
       // Stripe Feedback
       const params = new URLSearchParams(window.location.search)
@@ -312,11 +280,16 @@ export default function BillingPage() {
     return () => unsubscribe()
   }, [router])
 
-  const estimatedSpend = useMemo(
-    () =>
-      LEDGER.reduce((sum, row) => sum + Number(row.amount.replace("$", "")), 0),
-    []
-  )
+  const estimatedSpend = usageStats.currentBillUsd
+  const ledgerEntries = usageStats.ledger as LedgerEntry[]
+  const requestPercent = usageStats.monthlyUsagePercent ?? 0
+  const requestLabel =
+    usageStats.requestsUsed != null && usageStats.requestLimit != null
+      ? `${usageStats.requestsUsed.toLocaleString()} / ${usageStats.requestLimit.toLocaleString()}`
+      : "No metered requests reported"
+  const tokenSavingsPercent = usageStats.tokenSavingsPercent ?? 0
+  const tokensBeforeFilter = usageStats.tokensBeforeFilter
+  const tokensSaved = usageStats.tokensSaved
 
   const billedAmountLabel = useMemo(() => {
     const currency = PAYOUT_CURRENCY_OPTIONS[payoutCurrency]
@@ -337,10 +310,22 @@ export default function BillingPage() {
     setRefreshing(true)
 
     const localKeys = readLocalApiKeys(user?.email)
-    setActiveKeys(localKeys.length)
-    setLatestIssued(localKeys[0]?.created_at ?? null)
-
-    window.setTimeout(() => setRefreshing(false), 700)
+    fetchConsoleStats()
+      .then((liveStats) => {
+        const mergedStats = mergeConsoleStats(liveStats, {
+          activeKeys: localKeys.length,
+          latestIssue: localKeys[0]?.created_at,
+        })
+        setUsageStats(mergedStats)
+        setActiveKeys(mergedStats.activeKeys)
+        setLatestIssued(mergedStats.latestIssue)
+      })
+      .catch(() => {
+        setUsageStats(EMPTY_CONSOLE_STATS)
+        setActiveKeys(localKeys.length)
+        setLatestIssued(localKeys[0]?.created_at ?? null)
+      })
+      .finally(() => setRefreshing(false))
   }
 
   const saveControls = () => {
@@ -548,7 +533,9 @@ export default function BillingPage() {
                       Monthly usage
                     </p>
                     <p className="mt-2 text-xl font-semibold">
-                      {REQUEST_PERCENT}%
+                      {usageStats.monthlyUsagePercent == null
+                        ? "No usage"
+                        : `${usageStats.monthlyUsagePercent}%`}
                     </p>
                   </div>
                 </div>
@@ -673,12 +660,9 @@ export default function BillingPage() {
                         <p className="text-sm text-muted-foreground">
                           API calls
                         </p>
-                        <p className="text-sm font-semibold">
-                          {REQUESTS_THIS_MONTH.toLocaleString()} /{" "}
-                          {REQUEST_LIMIT.toLocaleString()}
-                        </p>
+                        <p className="text-sm font-semibold">{requestLabel}</p>
                       </div>
-                      <Progress value={REQUEST_PERCENT} className="h-2" />
+                      <Progress value={requestPercent} className="h-2" />
                     </div>
 
                     <div>
@@ -687,10 +671,12 @@ export default function BillingPage() {
                           Token reduction (Engram)
                         </p>
                         <p className="text-sm font-semibold">
-                          {TOKEN_SAVINGS_PERCENT}%
+                          {usageStats.tokenSavingsPercent == null
+                            ? "No data"
+                            : `${usageStats.tokenSavingsPercent}%`}
                         </p>
                       </div>
-                      <Progress value={TOKEN_SAVINGS_PERCENT} className="h-2" />
+                      <Progress value={tokenSavingsPercent} className="h-2" />
                     </div>
 
                     <div className="grid gap-3 sm:grid-cols-2">
@@ -699,7 +685,9 @@ export default function BillingPage() {
                           Tokens before filter
                         </p>
                         <p className="mt-1 text-lg font-semibold">
-                          {TOKENS_BEFORE_FILTER.toLocaleString()}
+                          {tokensBeforeFilter == null
+                            ? "No data"
+                            : tokensBeforeFilter.toLocaleString()}
                         </p>
                       </div>
                       <div>
@@ -707,7 +695,9 @@ export default function BillingPage() {
                           Tokens saved
                         </p>
                         <p className="mt-1 text-lg font-semibold">
-                          {TOKENS_SAVED.toLocaleString()}
+                          {tokensSaved == null
+                            ? "No data"
+                            : tokensSaved.toLocaleString()}
                         </p>
                       </div>
                     </div>
@@ -738,17 +728,26 @@ export default function BillingPage() {
                 </CardHeader>
                 <CardContent className="space-y-5">
                   <div className="space-y-3 rounded-sm bg-muted/30 p-4">
-                    {TIER_USAGE.map((tier) => (
-                      <div key={tier.tier} className="space-y-2">
-                        <div className="flex items-center justify-between">
-                          <p className="font-medium">{tier.tier}</p>
-                          <p className="text-sm text-muted-foreground">
-                            {tier.calls.toLocaleString()} calls
-                          </p>
-                        </div>
-                        <Progress value={tier.share} className="h-2" />
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <p className="font-medium">Metered requests</p>
+                        <p className="text-sm text-muted-foreground">
+                          {requestLabel}
+                        </p>
                       </div>
-                    ))}
+                      <Progress value={requestPercent} className="h-2" />
+                    </div>
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <p className="font-medium">Token savings</p>
+                        <p className="text-sm text-muted-foreground">
+                          {usageStats.tokenSavingsPercent == null
+                            ? "No data"
+                            : `${usageStats.tokenSavingsPercent}%`}
+                        </p>
+                      </div>
+                      <Progress value={tokenSavingsPercent} className="h-2" />
+                    </div>
                   </div>
 
                   <div className="space-y-3 rounded-sm bg-muted/30 p-4">
@@ -760,7 +759,7 @@ export default function BillingPage() {
                         </p>
                       </div>
                       <p className="font-semibold">
-                        {INDEXED_CHUNKS.toLocaleString()}
+                        {usageStats.chunksIndexed.toLocaleString()}
                       </p>
                     </div>
                     <div className="flex items-center justify-between gap-2">
@@ -770,7 +769,9 @@ export default function BillingPage() {
                           Connected warehouses
                         </p>
                       </div>
-                      <p className="font-semibold">{CONNECTED_WAREHOUSES}</p>
+                      <p className="font-semibold">
+                        {usageStats.connectedWarehouses}
+                      </p>
                     </div>
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center gap-2">
@@ -779,7 +780,7 @@ export default function BillingPage() {
                           Files synced
                         </p>
                       </div>
-                      <p className="font-semibold">{FILES_SYNCED}</p>
+                      <p className="font-semibold">{usageStats.filesSynced}</p>
                     </div>
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center gap-2">
@@ -831,7 +832,12 @@ export default function BillingPage() {
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
-                {LEDGER.map((entry, index) => (
+                {ledgerEntries.length === 0 && (
+                  <div className="rounded-sm bg-muted/20 p-4 text-sm text-muted-foreground">
+                    No ledger entries have been reported for this key yet.
+                  </div>
+                )}
+                {ledgerEntries.map((entry, index) => (
                   <div key={entry.id}>
                     {index > 0 && <Separator className="mb-3" />}
                     <div className="flex flex-col gap-3 rounded-sm bg-muted/20 p-4 sm:flex-row sm:items-center sm:justify-between">

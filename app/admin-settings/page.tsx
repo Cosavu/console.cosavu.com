@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
 import { useTheme } from "next-themes"
-import { onAuthStateChanged, type User } from "firebase/auth"
 import {
   Check,
   ChevronRight,
@@ -70,7 +69,7 @@ import {
   COSAVU_DATA_API_BASE_URL,
   COSAVU_STAN_API_BASE_URL,
 } from "@/lib/cosavu-api"
-import { auth } from "@/lib/firebase"
+import { watchConsoleAuth, type ConsoleUser } from "@/lib/console-auth"
 
 type AdminSettings = {
   workspaceName: string
@@ -211,7 +210,7 @@ export default function AdminSettingsPage() {
   const [saving, setSaving] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [copied, setCopied] = useState(false)
-  const [user, setUser] = useState<User | null>(null)
+  const [user, setUser] = useState<ConsoleUser | null>(null)
   const [activeTab, setActiveTab] = useState("workspace")
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null)
   const [settings, setSettings] = useState<AdminSettings>(() =>
@@ -225,7 +224,7 @@ export default function AdminSettingsPage() {
   }, [])
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+    const unsubscribe = watchConsoleAuth((currentUser) => {
       if (!currentUser) {
         router.push("/login")
         return

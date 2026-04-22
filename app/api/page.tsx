@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react"
 import { useRouter } from "next/navigation"
 import { useTheme } from "next-themes"
-import { onAuthStateChanged, type User } from "firebase/auth"
 import {
   Check,
   ChevronLeft,
@@ -82,8 +81,14 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { watchConsoleAuth, type ConsoleUser } from "@/lib/console-auth"
+import {
+  EMPTY_CONSOLE_STATS,
+  fetchConsoleStats,
+  mergeConsoleStats,
+  type ConsoleStats,
+} from "@/lib/console-stats"
 import { COSAVU_ENDPOINTS } from "@/lib/cosavu-api"
-import { auth } from "@/lib/firebase"
 import { createApiKey, getApiKeys } from "@/lib/supabase"
 
 type ApiKey = {
@@ -99,11 +104,6 @@ type ApiKey = {
   expires_at?: string | null
 }
 
-const MONTHLY_REQUESTS_USED = 1482
-const MONTHLY_REQUEST_LIMIT = 5000
-const QUOTA_PERCENT = Math.round(
-  (MONTHLY_REQUESTS_USED / MONTHLY_REQUEST_LIMIT) * 100
-)
 const LOCAL_API_KEYS_STORAGE_PREFIX = "cosavu:api-keys"
 const WEEKDAY_LABELS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"]
 
@@ -233,7 +233,9 @@ export default function ApiPage() {
   const [refreshing, setRefreshing] = useState(false)
   const [newKey, setNewKey] = useState<string | null>(null)
   const [copiedId, setCopiedId] = useState<string | null>(null)
-  const [user, setUser] = useState<User | null>(null)
+  const [user, setUser] = useState<ConsoleUser | null>(null)
+  const [usageStats, setUsageStats] =
+    useState<ConsoleStats>(EMPTY_CONSOLE_STATS)
   const [showKeys, setShowKeys] = useState<Record<string, boolean>>({})
   const [showPrimary, setShowPrimary] = useState(false)
   const [searchQuery, setSearchQuery] = useState("")
@@ -249,6 +251,13 @@ export default function ApiPage() {
   const [calendarMonth, setCalendarMonth] = useState(() => new Date())
 
   const primaryKey = keys[0]
+  const activeKeyCount = Math.max(keys.length, usageStats.activeKeys)
+  const latestIssue = primaryKey?.created_at || usageStats.latestIssue
+  const quotaPercent = usageStats.monthlyUsagePercent ?? 0
+  const quotaLabel =
+    usageStats.requestsUsed != null && usageStats.requestLimit != null
+      ? `${formatNumber(usageStats.requestsUsed)} / ${formatNumber(usageStats.requestLimit)}`
+      : "No metered requests reported"
   const calendarDays = useMemo(
     () => getCalendarDays(calendarMonth),
     [calendarMonth]
@@ -286,7 +295,7 @@ export default function ApiPage() {
   }, [])
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+    const unsubscribe = watchConsoleAuth(async (currentUser) => {
       if (!currentUser) {
         router.push("/login")
         return
@@ -294,6 +303,18 @@ export default function ApiPage() {
 
       setUser(currentUser)
       await fetchKeys(currentUser.email)
+
+      try {
+        const liveStats = await fetchConsoleStats()
+        setUsageStats(
+          mergeConsoleStats(liveStats, {
+            activeKeys: readLocalApiKeys(currentUser.email).length,
+            latestIssue: readLocalApiKeys(currentUser.email)[0]?.created_at,
+          })
+        )
+      } catch {
+        setUsageStats(EMPTY_CONSOLE_STATS)
+      }
     })
 
     return () => unsubscribe()
@@ -559,7 +580,7 @@ export default function ApiPage() {
                       </span>
                       <KeyRound className="size-4 text-muted-foreground" />
                     </div>
-                    <p className="text-2xl font-semibold">{keys.length}</p>
+                    <p className="text-2xl font-semibold">{activeKeyCount}</p>
                   </div>
                   <div className="rounded-sm bg-muted/30 p-4">
                     <div className="mb-3 flex items-center justify-between">
@@ -569,7 +590,7 @@ export default function ApiPage() {
                       <ShieldCheck className="size-4 text-muted-foreground" />
                     </div>
                     <p className="text-2xl font-semibold">
-                      {primaryKey ? formatDate(primaryKey.created_at) : "None"}
+                      {latestIssue ? formatDate(latestIssue) : "None"}
                     </p>
                   </div>
                   <div className="rounded-sm bg-muted/30 p-4">
@@ -579,7 +600,11 @@ export default function ApiPage() {
                       </span>
                       <Zap className="size-4 text-muted-foreground" />
                     </div>
-                    <p className="text-2xl font-semibold">{QUOTA_PERCENT}%</p>
+                    <p className="text-2xl font-semibold">
+                      {usageStats.monthlyUsagePercent == null
+                        ? "No usage"
+                        : `${usageStats.monthlyUsagePercent}%`}
+                    </p>
                   </div>
                 </div>
               </CardContent>
@@ -738,14 +763,13 @@ export default function ApiPage() {
                 <div className="space-y-3">
                   <div className="flex items-center justify-between gap-4 text-sm">
                     <span className="text-muted-foreground">Requests used</span>
-                    <span className="font-medium">
-                      {formatNumber(MONTHLY_REQUESTS_USED)} /{" "}
-                      {formatNumber(MONTHLY_REQUEST_LIMIT)}
-                    </span>
+                    <span className="font-medium">{quotaLabel}</span>
                   </div>
-                  <Progress value={QUOTA_PERCENT} className="h-2" />
+                  <Progress value={quotaPercent} className="h-2" />
                   <p className="text-xs text-muted-foreground">
-                    {QUOTA_PERCENT}% of the current monthly quota has been used.
+                    {usageStats.apiKeyFingerprint
+                      ? `Stats source: ${usageStats.apiKeyFingerprint}.`
+                      : "Live stats are not reporting monthly quota yet."}
                   </p>
                 </div>
               </CardContent>

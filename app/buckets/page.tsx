@@ -10,7 +10,6 @@ import {
 } from "react"
 import { useRouter } from "next/navigation"
 import { useTheme } from "next-themes"
-import { onAuthStateChanged, type User } from "firebase/auth"
 import {
   Box,
   Check,
@@ -87,7 +86,7 @@ import {
   listDataBuckets,
   uploadDataFile,
 } from "@/lib/cosavu-api"
-import { auth } from "@/lib/firebase"
+import { watchConsoleAuth, type ConsoleUser } from "@/lib/console-auth"
 
 type BucketSystem = "car-0" | "car-1"
 type BucketStatus = "ready" | "indexing" | "attention"
@@ -132,6 +131,12 @@ type UploadDraftFile = {
 
 const LOCAL_BUCKETS_STORAGE_PREFIX = "cosavu:buckets"
 const LOCAL_BUCKET_FILES_STORAGE_PREFIX = "cosavu:bucket-files"
+const SEEDED_BUCKET_IDS = new Set(["bucket-tenant-docs", "bucket-engram-cache"])
+const SEEDED_BUCKET_FILE_IDS = new Set([
+  "file-product-handbook",
+  "file-policy",
+  "file-engram-notes",
+])
 
 const REGION_OPTIONS = [
   { value: "us-east-1", label: "US East (N. Virginia)" },
@@ -212,7 +217,12 @@ function readLocalBuckets(email?: string | null) {
     if (!Array.isArray(parsedBuckets)) return []
 
     return parsedBuckets.filter((bucket): bucket is BucketRecord => {
-      return Boolean(bucket?.id && bucket?.name && bucket?.s3Bucket)
+      return Boolean(
+        bucket?.id &&
+        bucket?.name &&
+        bucket?.s3Bucket &&
+        !SEEDED_BUCKET_IDS.has(bucket.id)
+      )
     })
   } catch {
     return []
@@ -230,7 +240,13 @@ function readLocalBucketFiles(email?: string | null) {
     if (!Array.isArray(parsedFiles)) return []
 
     return parsedFiles.filter((file): file is BucketFile => {
-      return Boolean(file?.id && file?.bucketId && file?.name)
+      return Boolean(
+        file?.id &&
+        file?.bucketId &&
+        file?.name &&
+        !SEEDED_BUCKET_FILE_IDS.has(file.id) &&
+        !SEEDED_BUCKET_IDS.has(file.bucketId)
+      )
     })
   } catch {
     return []
@@ -259,84 +275,12 @@ function saveLocalBucketFiles(
 }
 
 function createDefaultBuckets(email?: string | null) {
-  const now = new Date().toISOString()
-  const tenantSlug = getTenantSlug(email)
-  const ownerEmail = email || "workspace@cosavu.com"
+  void email
 
-  const buckets: BucketRecord[] = [
-    {
-      id: "bucket-tenant-docs",
-      name: "Tenant documents",
-      s3Bucket: `cosavu-private-${tenantSlug}-docs`,
-      s3Prefix: `${tenantSlug}/tenant-docs/`,
-      region: "us-east-1",
-      system: "car-0",
-      status: "ready",
-      ownerEmail,
-      createdAt: "2026-04-12T08:00:00.000Z",
-      updatedAt: now,
-      fileCount: 2,
-      totalBytes: 12_900_000,
-      chunksIndexed: 12460,
-      encryption: "SSE-S3",
-      retentionDays: 90,
-    },
-    {
-      id: "bucket-engram-cache",
-      name: "Engram cache",
-      s3Bucket: `cosavu-private-${tenantSlug}-engram`,
-      s3Prefix: `${tenantSlug}/engram-cache/`,
-      region: "ap-south-1",
-      system: "car-1",
-      status: "indexing",
-      ownerEmail,
-      createdAt: "2026-04-16T11:30:00.000Z",
-      updatedAt: "2026-04-18T09:40:00.000Z",
-      fileCount: 1,
-      totalBytes: 5_600_000,
-      chunksIndexed: 3420,
-      encryption: "SSE-S3",
-      retentionDays: 30,
-    },
-  ]
-
-  const files: BucketFile[] = [
-    {
-      id: "file-product-handbook",
-      bucketId: "bucket-tenant-docs",
-      name: "product-handbook.pdf",
-      size: 4_700_000,
-      type: "application/pdf",
-      s3Key: `${tenantSlug}/tenant-docs/file-product-handbook/product-handbook.pdf`,
-      chunksIndexed: 4210,
-      uploadedAt: "2026-04-12T08:11:00.000Z",
-      status: "indexed",
-    },
-    {
-      id: "file-policy",
-      bucketId: "bucket-tenant-docs",
-      name: "security-policy.docx",
-      size: 2_100_000,
-      type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-      s3Key: `${tenantSlug}/tenant-docs/file-policy/security-policy.docx`,
-      chunksIndexed: 1760,
-      uploadedAt: "2026-04-14T10:24:00.000Z",
-      status: "indexed",
-    },
-    {
-      id: "file-engram-notes",
-      bucketId: "bucket-engram-cache",
-      name: "retrieval-notes.md",
-      size: 980_000,
-      type: "text/markdown",
-      s3Key: `${tenantSlug}/engram-cache/file-engram-notes/retrieval-notes.md`,
-      chunksIndexed: 620,
-      uploadedAt: "2026-04-18T09:40:00.000Z",
-      status: "stored",
-    },
-  ]
-
-  return { buckets, files }
+  return { buckets: [], files: [] } satisfies {
+    buckets: BucketRecord[]
+    files: BucketFile[]
+  }
 }
 
 function getStatusVariant(status: BucketStatus) {
@@ -357,7 +301,7 @@ export default function BucketsPage() {
   const [uploading, setUploading] = useState(false)
   const [uploadSheetOpen, setUploadSheetOpen] = useState(false)
   const [copiedId, setCopiedId] = useState<string | null>(null)
-  const [user, setUser] = useState<User | null>(null)
+  const [user, setUser] = useState<ConsoleUser | null>(null)
   const [buckets, setBuckets] = useState<BucketRecord[]>([])
   const [bucketFiles, setBucketFiles] = useState<BucketFile[]>([])
   const [selectedBucketId, setSelectedBucketId] = useState<string | null>(null)
@@ -377,7 +321,7 @@ export default function BucketsPage() {
   }, [])
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+    const unsubscribe = watchConsoleAuth((currentUser) => {
       if (!currentUser) {
         router.push("/login")
         return

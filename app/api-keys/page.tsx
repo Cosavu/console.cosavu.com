@@ -19,8 +19,7 @@ import {
   MoreVertical,
   X,
 } from "lucide-react"
-import { auth } from "@/lib/firebase"
-import { onAuthStateChanged, type User } from "firebase/auth"
+import { watchConsoleAuth, type ConsoleUser } from "@/lib/console-auth"
 import { createApiKey, getApiKeys } from "@/lib/supabase"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -40,7 +39,7 @@ export default function ApiKeysPage() {
   const [creating, setCreating] = useState(false)
   const [newKey, setNewKey] = useState<string | null>(null)
   const [copiedId, setCopiedId] = useState<string | null>(null)
-  const [user, setUser] = useState<User | null>(null)
+  const [user, setUser] = useState<ConsoleUser | null>(null)
   const [showPrimary, setShowPrimary] = useState(false)
 
   const fetchKeys = async (email?: string) => {
@@ -51,7 +50,7 @@ export default function ApiKeysPage() {
   }
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+    const unsubscribe = watchConsoleAuth(async (currentUser) => {
       if (!currentUser) {
         router.push("/login")
       } else {
@@ -139,7 +138,7 @@ export default function ApiKeysPage() {
                   <div className="group flex w-full items-center justify-between rounded-xl border border-transparent bg-zinc-100/80 p-4 transition-all hover:border-zinc-200 dark:bg-white/5 dark:hover:border-white/10">
                     <code className="font-mono text-sm font-bold tracking-[0.1em] text-foreground/70">
                       {showPrimary
-                        ? keys[0]?.key_string || "CSV_DEFAULT_****************"
+                        ? keys[0]?.key_string || "No key available"
                         : "****************************"}
                     </code>
                     <button

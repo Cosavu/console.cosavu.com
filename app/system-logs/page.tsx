@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
 import { useTheme } from "next-themes"
-import { onAuthStateChanged, type User } from "firebase/auth"
 import {
   Activity,
   AlertTriangle,
@@ -58,7 +57,6 @@ import {
   SidebarTrigger,
 } from "@/components/ui/sidebar"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   Tooltip,
@@ -66,7 +64,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { COSAVU_ENDPOINTS } from "@/lib/cosavu-api"
-import { auth } from "@/lib/firebase"
+import { watchConsoleAuth, type ConsoleUser } from "@/lib/console-auth"
 
 type LogLevel = "info" | "warning" | "error" | "debug"
 type LogSource = "api" | "auth" | "engine" | "storage" | "warehouse" | "billing"
@@ -88,6 +86,16 @@ type LogEvent = {
 }
 
 const LOCAL_SYSTEM_LOGS_STORAGE_PREFIX = "cosavu:system-logs"
+const SEEDED_SYSTEM_LOG_IDS = new Set([
+  "log-api-ready",
+  "log-warehouse-sync",
+  "log-auth-warning",
+  "log-file-storage",
+  "log-engine-load",
+  "log-s3-error",
+  "log-billing-checkout",
+  "log-model-load",
+])
 
 const LEVEL_LABELS: Record<LogLevel, string> = {
   info: "Info",
@@ -125,14 +133,6 @@ const TIME_OPTIONS = [
 
 function getSystemLogsStorageKey(email?: string | null) {
   return `${LOCAL_SYSTEM_LOGS_STORAGE_PREFIX}:${email?.toLowerCase() || "unknown"}`
-}
-
-function makeId(prefix: string) {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    return `${prefix}-${crypto.randomUUID().slice(0, 8)}`
-  }
-
-  return `${prefix}-${Date.now().toString(36)}`
 }
 
 function formatNumber(value: number) {
@@ -195,7 +195,13 @@ function readLocalSystemLogs(email?: string | null) {
     if (!Array.isArray(parsedLogs)) return []
 
     return parsedLogs.filter((log): log is LogEvent => {
-      return Boolean(log?.id && log?.timestamp && log?.message && log?.logger)
+      return Boolean(
+        log?.id &&
+        log?.timestamp &&
+        log?.message &&
+        log?.logger &&
+        !SEEDED_SYSTEM_LOG_IDS.has(log.id)
+      )
     })
   } catch {
     return []
@@ -215,158 +221,9 @@ function saveLocalSystemLogs(
 }
 
 function createDefaultSystemLogs(email?: string | null) {
-  const actor = email || "workspace@cosavu.com"
+  void email
 
-  return [
-    {
-      id: "log-api-ready",
-      timestamp: "2026-04-21T09:42:12.000Z",
-      level: "info",
-      source: "api",
-      logger: "cosavu.api",
-      route: "lifespan.startup",
-      tenant: "cosavu",
-      actor,
-      requestId: "req_startup_01",
-      statusCode: 200,
-      durationMs: 118,
-      message: "Cosavu Unified Engines ready",
-      details:
-        "CAR-0 storage and CAR-1 vector engines initialized for tenant-scoped retrieval.",
-    },
-    {
-      id: "log-warehouse-sync",
-      timestamp: "2026-04-21T09:39:48.000Z",
-      level: "info",
-      source: "warehouse",
-      logger: "cosavu.warehouse.sync",
-      route: `POST ${COSAVU_ENDPOINTS.data.warehouseSync}`,
-      tenant: "cosavu",
-      actor,
-      requestId: "req_wh_7fd2",
-      statusCode: 202,
-      durationMs: 342,
-      message: "Warehouse delta sync queued",
-      details:
-        "S3 source accepted for scan. Objects will be parsed, chunked, and indexed into private collections.",
-    },
-    {
-      id: "log-auth-warning",
-      timestamp: "2026-04-21T09:31:05.000Z",
-      level: "warning",
-      source: "auth",
-      logger: "cosavu.auth.middleware",
-      route: `POST ${COSAVU_ENDPOINTS.data.query}`,
-      tenant: "unknown",
-      actor: "anonymous",
-      requestId: "req_auth_19a0",
-      statusCode: 401,
-      durationMs: 22,
-      message: "Unauthorized API key attempt",
-      details:
-        "Request was rejected before tenant context was attached. Prefix: csvu_xxxx.",
-    },
-    {
-      id: "log-file-storage",
-      timestamp: "2026-04-21T09:20:44.000Z",
-      level: "info",
-      source: "storage",
-      logger: "cosavu.core.file_storage",
-      route: `POST ${COSAVU_ENDPOINTS.data.filesUpload}`,
-      tenant: "cosavu",
-      actor,
-      requestId: "req_file_b91c",
-      statusCode: 200,
-      durationMs: 736,
-      message: "Uploaded product-handbook.pdf to S3 bucket",
-      details:
-        "Raw file stored under tenant prefix before parsing and chunk indexing.",
-    },
-    {
-      id: "log-engine-load",
-      timestamp: "2026-04-21T09:14:33.000Z",
-      level: "debug",
-      source: "engine",
-      logger: "cosavu.engine",
-      route: `GET ${COSAVU_ENDPOINTS.data.buckets}`,
-      tenant: "cosavu",
-      actor,
-      requestId: "req_bucket_42c1",
-      statusCode: 200,
-      durationMs: 81,
-      message: "Loaded tenant index",
-      details:
-        "Tenant index loaded from persisted storage with 48,210 vectors available.",
-    },
-    {
-      id: "log-s3-error",
-      timestamp: "2026-04-21T08:58:01.000Z",
-      level: "error",
-      source: "storage",
-      logger: "cosavu.core.s3_sync",
-      route: "PUT cosavu-indices/cosavu/index.zip",
-      tenant: "cosavu",
-      actor: "system",
-      requestId: "req_s3_09d4",
-      statusCode: 503,
-      durationMs: 1820,
-      message: "Directory zip upload failed",
-      details:
-        "Temporary upstream S3 write failure. Local index cache remained available.",
-    },
-    {
-      id: "log-billing-checkout",
-      timestamp: "2026-04-21T08:45:20.000Z",
-      level: "info",
-      source: "billing",
-      logger: "cosavu.billing.checkout",
-      route: "POST /api/checkout",
-      tenant: "cosavu",
-      actor,
-      requestId: "req_bill_6be8",
-      statusCode: 200,
-      durationMs: 414,
-      message: "Stripe checkout session created",
-      details:
-        "Outstanding invoice balance was converted into a hosted checkout session.",
-    },
-    {
-      id: "log-model-load",
-      timestamp: "2026-04-21T08:31:11.000Z",
-      level: "info",
-      source: "engine",
-      logger: "cosavu.engine",
-      route: "lifespan.startup",
-      tenant: "system",
-      actor: "system",
-      requestId: "req_model_7aa1",
-      statusCode: 200,
-      durationMs: 1265,
-      message: "Loading embedding model",
-      details:
-        "Embedding model loaded before tenant query and upload routes were enabled.",
-    },
-  ] satisfies LogEvent[]
-}
-
-function createLiveLog(email?: string | null) {
-  const now = new Date().toISOString()
-
-  return {
-    id: makeId("log"),
-    timestamp: now,
-    level: "info",
-    source: "api",
-    logger: "cosavu.api",
-    route: `GET ${COSAVU_ENDPOINTS.data.health}`,
-    tenant: "cosavu",
-    actor: email || "workspace@cosavu.com",
-    requestId: makeId("req"),
-    statusCode: 200,
-    durationMs: 28,
-    message: "Health check completed",
-    details: "Console live tail refreshed the latest system status.",
-  } satisfies LogEvent
+  return [] satisfies LogEvent[]
 }
 
 export default function SystemLogsPage() {
@@ -377,9 +234,8 @@ export default function SystemLogsPage() {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [copied, setCopied] = useState(false)
-  const [liveTail, setLiveTail] = useState(true)
   const [clockNow, setClockNow] = useState(() => Date.now())
-  const [user, setUser] = useState<User | null>(null)
+  const [user, setUser] = useState<ConsoleUser | null>(null)
   const [logs, setLogs] = useState<LogEvent[]>([])
   const [selectedLogId, setSelectedLogId] = useState<string | null>(null)
   const [query, setQuery] = useState("")
@@ -401,7 +257,7 @@ export default function SystemLogsPage() {
   }, [])
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+    const unsubscribe = watchConsoleAuth((currentUser) => {
       if (!currentUser) {
         router.push("/login")
         return
@@ -488,19 +344,10 @@ export default function SystemLogsPage() {
     setErrorMessage(null)
 
     const storedLogs = readLocalSystemLogs(user?.email)
-    const nextLogs =
-      liveTail && user
-        ? [
-            createLiveLog(user.email),
-            ...(storedLogs.length > 0 ? storedLogs : logs),
-          ]
-        : storedLogs.length > 0
-          ? storedLogs
-          : logs
+    const nextLogs = storedLogs.length > 0 ? storedLogs : logs
 
     setLogs(nextLogs)
     setSelectedLogId(nextLogs[0]?.id ?? null)
-    saveLocalSystemLogs(user?.email, nextLogs)
 
     window.setTimeout(() => setRefreshing(false), 650)
   }
@@ -626,16 +473,6 @@ export default function SystemLogsPage() {
                   </CardDescription>
                 </div>
                 <CardAction className="col-span-full col-start-1 row-start-2 flex flex-wrap items-center gap-2 justify-self-start md:col-span-1 md:col-start-2 md:row-start-1 md:justify-self-end">
-                  <div className="flex items-center gap-2 rounded-sm bg-muted/30 px-3 py-2">
-                    <span className="text-sm text-muted-foreground">
-                      Live tail
-                    </span>
-                    <Switch
-                      size="sm"
-                      checked={liveTail}
-                      onCheckedChange={setLiveTail}
-                    />
-                  </div>
                   <Button
                     variant="outline"
                     className="rounded-sm"
@@ -879,7 +716,7 @@ export default function SystemLogsPage() {
                         </div>
                         <p className="font-medium">No logs match filters</p>
                         <p className="mt-1 max-w-sm text-sm text-muted-foreground">
-                          Change the filters or refresh the live tail.
+                          Change the filters or refresh logs.
                         </p>
                         <Button
                           className="mt-5 rounded-sm"

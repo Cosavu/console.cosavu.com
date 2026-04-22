@@ -4,7 +4,6 @@ import { useEffect, useMemo, useState, type FormEvent } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useTheme } from "next-themes"
-import { onAuthStateChanged, type User } from "firebase/auth"
 import {
   Activity,
   Boxes,
@@ -82,7 +81,7 @@ import {
   listDataTenants,
   saveLocalDataTenantKey,
 } from "@/lib/cosavu-api"
-import { auth } from "@/lib/firebase"
+import { watchConsoleAuth, type ConsoleUser } from "@/lib/console-auth"
 
 type TenantMode = "upload-api" | "warehouse" | "hybrid"
 type TenantStatus = "active" | "syncing" | "attention"
@@ -108,6 +107,11 @@ type TenantRecord = {
 
 const LOCAL_TENANTS_STORAGE_PREFIX = "cosavu:tenants"
 const LOCAL_API_KEYS_STORAGE_PREFIX = "cosavu:api-keys"
+const SEEDED_TENANT_IDS = new Set([
+  "tenant-cosavu-main",
+  "tenant-retrieval-sandbox",
+  "tenant-enterprise-warehouse",
+])
 
 const MODE_LABELS: Record<TenantMode, string> = {
   "upload-api": "Upload API",
@@ -153,62 +157,10 @@ function getLocalApiKeyCount(email?: string | null) {
 }
 
 function createDefaultTenants(email?: string | null, keyCount = 0) {
-  const ownerEmail = email || "workspace@cosavu.com"
-  const now = new Date().toISOString()
+  void email
+  void keyCount
 
-  return [
-    {
-      id: "tenant-cosavu-main",
-      name: "Cosavu Team Workspace",
-      slug: "cosavu",
-      status: "active",
-      mode: "hybrid",
-      region: "us-east-1",
-      ownerEmail,
-      createdAt: now,
-      apiKeys: keyCount,
-      warehouses: 2,
-      files: 86,
-      chunks: 12460,
-      lastActivity: now,
-      defaultSystem: "car-0",
-      hardIsolation: true,
-    },
-    {
-      id: "tenant-retrieval-sandbox",
-      name: "Retrieval Sandbox",
-      slug: "retrieval-sandbox",
-      status: "syncing",
-      mode: "upload-api",
-      region: "ap-south-1",
-      ownerEmail,
-      createdAt: "2026-04-12T08:30:00.000Z",
-      apiKeys: 1,
-      warehouses: 0,
-      files: 28,
-      chunks: 3420,
-      lastActivity: "2026-04-18T07:12:00.000Z",
-      defaultSystem: "car-1",
-      hardIsolation: true,
-    },
-    {
-      id: "tenant-enterprise-warehouse",
-      name: "Enterprise Warehouse",
-      slug: "enterprise-warehouse",
-      status: "attention",
-      mode: "warehouse",
-      region: "eu-west-1",
-      ownerEmail,
-      createdAt: "2026-04-08T12:05:00.000Z",
-      apiKeys: 2,
-      warehouses: 1,
-      files: 51,
-      chunks: 7020,
-      lastActivity: "2026-04-17T18:45:00.000Z",
-      defaultSystem: "car-0",
-      hardIsolation: true,
-    },
-  ] satisfies TenantRecord[]
+  return [] satisfies TenantRecord[]
 }
 
 function readLocalTenants(email?: string | null) {
@@ -224,7 +176,12 @@ function readLocalTenants(email?: string | null) {
     if (!Array.isArray(parsedTenants)) return []
 
     return parsedTenants.filter((tenant): tenant is TenantRecord => {
-      return Boolean(tenant?.id && tenant?.name && tenant?.slug)
+      return Boolean(
+        tenant?.id &&
+        tenant?.name &&
+        tenant?.slug &&
+        !SEEDED_TENANT_IDS.has(tenant.id)
+      )
     })
   } catch {
     return []
@@ -297,7 +254,7 @@ export default function TenantsPage() {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [user, setUser] = useState<User | null>(null)
+  const [user, setUser] = useState<ConsoleUser | null>(null)
   const [tenants, setTenants] = useState<TenantRecord[]>([])
   const [selectedTenantId, setSelectedTenantId] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
@@ -321,7 +278,7 @@ export default function TenantsPage() {
   }, [])
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+    const unsubscribe = watchConsoleAuth((currentUser) => {
       if (!currentUser) {
         router.push("/login")
         return

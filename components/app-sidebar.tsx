@@ -2,8 +2,7 @@
 
 import * as React from "react"
 import Link from "next/link"
-import { usePathname } from "next/navigation"
-import { onAuthStateChanged, type User } from "firebase/auth"
+import { usePathname, useRouter } from "next/navigation"
 import {
   BarChart2,
   List,
@@ -17,6 +16,7 @@ import {
   Rocket,
   Plus,
   CreditCard,
+  LogOut,
 } from "lucide-react"
 
 import {
@@ -40,9 +40,14 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
-import { auth } from "@/lib/firebase"
+import { Button } from "@/components/ui/button"
+import {
+  signOutConsole,
+  watchConsoleAuth,
+  type ConsoleUser,
+} from "@/lib/console-auth"
 
-function formatProfileName(user: User | null) {
+function formatProfileName(user: ConsoleUser | null) {
   const displayName = user?.displayName?.trim()
   if (displayName) return displayName
 
@@ -62,9 +67,8 @@ function getProfileInitial(name: string, email?: string | null) {
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const pathname = usePathname()
-  const [authUser, setAuthUser] = React.useState<User | null>(
-    () => auth.currentUser
-  )
+  const router = useRouter()
+  const [authUser, setAuthUser] = React.useState<ConsoleUser | null>(null)
   const isActive = React.useCallback(
     (href: string) =>
       href === "/"
@@ -77,8 +81,13 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const profileInitial = getProfileInitial(profileName, authUser?.email)
 
   React.useEffect(() => {
-    return onAuthStateChanged(auth, setAuthUser)
+    return watchConsoleAuth(setAuthUser)
   }, [])
+
+  const handleLogout = async () => {
+    await signOutConsole()
+    router.push("/login")
+  }
 
   return (
     <Sidebar variant="sidebar" className="border-none shadow-none" {...props}>
@@ -272,6 +281,14 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 </span>
               </div>
             </div>
+            <Button
+              variant="ghost"
+              className="mt-2 w-full justify-start rounded-sm text-muted-foreground hover:text-foreground"
+              onClick={handleLogout}
+            >
+              <LogOut className="size-4" />
+              Logout
+            </Button>
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarFooter>

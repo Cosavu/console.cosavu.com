@@ -12,10 +12,11 @@ import {
   FieldLabel,
   FieldSeparator,
 } from "@/components/ui/field"
-import { signInWithPopup, onAuthStateChanged } from "firebase/auth"
+import { signInWithPopup } from "firebase/auth"
 import { auth, googleProvider } from "@/lib/firebase"
 import { useRouter } from "next/navigation"
 import { useEffect } from "react"
+import { watchConsoleAuth } from "@/lib/console-auth"
 
 export function SignupForm({
   className,
@@ -24,7 +25,7 @@ export function SignupForm({
   const router = useRouter()
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
+    const unsubscribe = watchConsoleAuth((user) => {
       if (user) {
         router.push("/")
       }

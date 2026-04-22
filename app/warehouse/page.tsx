@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react"
 import { useRouter } from "next/navigation"
 import { useTheme } from "next-themes"
-import { onAuthStateChanged, type User } from "firebase/auth"
 import {
   Check,
   ChevronRight,
@@ -75,7 +74,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { COSAVU_ENDPOINTS } from "@/lib/cosavu-api"
-import { auth } from "@/lib/firebase"
+import { watchConsoleAuth, type ConsoleUser } from "@/lib/console-auth"
 
 type WarehouseProvider = "aws-s3" | "gcp-storage"
 type WarehouseStatus = "connected" | "syncing" | "attention" | "paused"
@@ -117,6 +116,16 @@ type SyncRun = {
 
 const LOCAL_WAREHOUSE_STORAGE_PREFIX = "cosavu:warehouses"
 const LOCAL_WAREHOUSE_RUNS_STORAGE_PREFIX = "cosavu:warehouse-runs"
+const SEEDED_WAREHOUSE_IDS = new Set([
+  "warehouse-product-s3",
+  "warehouse-gcp-research",
+  "warehouse-archive-s3",
+])
+const SEEDED_WAREHOUSE_RUN_IDS = new Set([
+  "run-product-0421",
+  "run-research-0421",
+  "run-archive-0420",
+])
 
 const PROVIDER_LABELS: Record<WarehouseProvider, string> = {
   "aws-s3": "AWS S3",
@@ -203,7 +212,12 @@ function readLocalWarehouses(email?: string | null) {
 
     return parsedWarehouses.filter(
       (warehouse): warehouse is WarehouseConnection => {
-        return Boolean(warehouse?.id && warehouse?.name && warehouse?.uri)
+        return Boolean(
+          warehouse?.id &&
+          warehouse?.name &&
+          warehouse?.uri &&
+          !SEEDED_WAREHOUSE_IDS.has(warehouse.id)
+        )
       }
     )
   } catch {
@@ -224,7 +238,13 @@ function readLocalSyncRuns(email?: string | null) {
     if (!Array.isArray(parsedRuns)) return []
 
     return parsedRuns.filter((run): run is SyncRun => {
-      return Boolean(run?.id && run?.warehouseId && run?.startedAt)
+      return Boolean(
+        run?.id &&
+        run?.warehouseId &&
+        run?.startedAt &&
+        !SEEDED_WAREHOUSE_RUN_IDS.has(run.id) &&
+        !SEEDED_WAREHOUSE_IDS.has(run.warehouseId)
+      )
     })
   } catch {
     return []
@@ -253,108 +273,12 @@ function saveLocalSyncRuns(email: string | null | undefined, runs: SyncRun[]) {
 }
 
 function createDefaultWarehouseState(email?: string | null) {
-  const ownerEmail = email || "workspace@cosavu.com"
+  void email
 
-  const warehouses: WarehouseConnection[] = [
-    {
-      id: "warehouse-product-s3",
-      name: "Product knowledge lake",
-      provider: "aws-s3",
-      uri: "s3://cosavu-prod-knowledge/raw/",
-      prefix: "raw/product/",
-      region: "us-east-1",
-      system: "car-0",
-      status: "connected",
-      ownerEmail,
-      createdAt: "2026-04-12T08:20:00.000Z",
-      lastSyncAt: "2026-04-21T03:45:00.000Z",
-      nextSyncAt: "2026-04-21T15:45:00.000Z",
-      filesIndexed: 861,
-      objectsScanned: 1842,
-      totalBytes: 149_400_000_000,
-      chunksIndexed: 48210,
-      credentialLabel: "arn:aws:iam::4821:role/cosavu-reader",
-      autoSync: true,
-    },
-    {
-      id: "warehouse-gcp-research",
-      name: "Research exports",
-      provider: "gcp-storage",
-      uri: "gs://cosavu-research-dropzone/docs/",
-      prefix: "docs/",
-      region: "global",
-      system: "car-1",
-      status: "syncing",
-      ownerEmail,
-      createdAt: "2026-04-16T10:00:00.000Z",
-      lastSyncAt: "2026-04-21T08:10:00.000Z",
-      nextSyncAt: "2026-04-21T20:10:00.000Z",
-      filesIndexed: 214,
-      objectsScanned: 390,
-      totalBytes: 22_700_000_000,
-      chunksIndexed: 10940,
-      credentialLabel: "cosavu-indexer@project.iam.gserviceaccount.com",
-      autoSync: true,
-    },
-    {
-      id: "warehouse-archive-s3",
-      name: "Archive dropbox",
-      provider: "aws-s3",
-      uri: "s3://cosavu-archive-import/",
-      prefix: "incoming/",
-      region: "us-west-2",
-      system: "car-0",
-      status: "attention",
-      ownerEmail,
-      createdAt: "2026-04-18T15:30:00.000Z",
-      lastSyncAt: "2026-04-20T18:25:00.000Z",
-      nextSyncAt: null,
-      filesIndexed: 58,
-      objectsScanned: 77,
-      totalBytes: 7_500_000_000,
-      chunksIndexed: 2984,
-      credentialLabel: "arn:aws:iam::4821:role/archive-reader",
-      autoSync: false,
-    },
-  ]
-
-  const runs: SyncRun[] = [
-    {
-      id: "run-product-0421",
-      warehouseId: "warehouse-product-s3",
-      startedAt: "2026-04-21T03:45:00.000Z",
-      finishedAt: "2026-04-21T03:49:00.000Z",
-      status: "completed",
-      filesProcessed: 44,
-      filesSkipped: 9,
-      chunksIndexed: 2410,
-      message: "Delta sync completed",
-    },
-    {
-      id: "run-research-0421",
-      warehouseId: "warehouse-gcp-research",
-      startedAt: "2026-04-21T08:10:00.000Z",
-      finishedAt: null,
-      status: "running",
-      filesProcessed: 18,
-      filesSkipped: 2,
-      chunksIndexed: 630,
-      message: "Scanning object changes",
-    },
-    {
-      id: "run-archive-0420",
-      warehouseId: "warehouse-archive-s3",
-      startedAt: "2026-04-20T18:25:00.000Z",
-      finishedAt: "2026-04-20T18:26:00.000Z",
-      status: "failed",
-      filesProcessed: 0,
-      filesSkipped: 0,
-      chunksIndexed: 0,
-      message: "Credential role can list bucket but cannot read objects",
-    },
-  ]
-
-  return { warehouses, runs }
+  return { warehouses: [], runs: [] } satisfies {
+    warehouses: WarehouseConnection[]
+    runs: SyncRun[]
+  }
 }
 
 function getStatusVariant(status: WarehouseStatus) {
@@ -386,7 +310,7 @@ export default function WarehousePage() {
   const [saving, setSaving] = useState(false)
   const [setupSheetOpen, setSetupSheetOpen] = useState(false)
   const [copiedId, setCopiedId] = useState<string | null>(null)
-  const [user, setUser] = useState<User | null>(null)
+  const [user, setUser] = useState<ConsoleUser | null>(null)
   const [warehouses, setWarehouses] = useState<WarehouseConnection[]>([])
   const [syncRuns, setSyncRuns] = useState<SyncRun[]>([])
   const [selectedWarehouseId, setSelectedWarehouseId] = useState<string | null>(
@@ -413,7 +337,7 @@ export default function WarehousePage() {
   }, [])
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+    const unsubscribe = watchConsoleAuth((currentUser) => {
       if (!currentUser) {
         router.push("/login")
         return

@@ -4,7 +4,6 @@ import Link from "next/link"
 import { useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
 import { useTheme } from "next-themes"
-import { onAuthStateChanged, type User } from "firebase/auth"
 import {
   BadgeDollarSign,
   BarChart2,
@@ -63,7 +62,12 @@ import {
   COSAVU_DATA_API_BASE_URL,
   COSAVU_STAN_API_BASE_URL,
 } from "@/lib/cosavu-api"
-import { auth } from "@/lib/firebase"
+import { watchConsoleAuth, type ConsoleUser } from "@/lib/console-auth"
+import {
+  EMPTY_CONSOLE_STATS,
+  fetchConsoleStats,
+  mergeConsoleStats,
+} from "@/lib/console-stats"
 
 type StoredRecord = Record<string, unknown>
 
@@ -131,50 +135,50 @@ const STORAGE_PREFIXES = {
 
 const FALLBACK_OVERVIEW: WorkspaceOverview = {
   api: {
-    activeKeys: 1,
-    latestIssue: "Apr 18, 2026",
+    activeKeys: 0,
+    latestIssue: "None",
   },
   billing: {
-    usagePercent: 30,
-    currentBill: 48.36,
-    paidInvoices: 4,
+    usagePercent: 0,
+    currentBill: 0,
+    paidInvoices: 0,
   },
   buckets: {
-    total: 3,
-    files: 47,
-    storageBytes: 1887436800,
+    total: 0,
+    files: 0,
+    storageBytes: 0,
   },
   warehouse: {
-    connected: 2,
-    runs: 11,
-    indexedBytes: 7516192768,
+    connected: 0,
+    runs: 0,
+    indexedBytes: 0,
   },
   tenants: {
-    active: 4,
-    syncing: 1,
+    active: 0,
+    syncing: 0,
   },
   logs: {
-    total: 128,
-    warnings: 6,
-    errors: 1,
+    total: 0,
+    warnings: 0,
+    errors: 0,
   },
   queries: {
-    total: 1482,
-    p95Latency: 73,
-    successRate: 96,
-    retentionRate: 58,
+    total: 0,
+    p95Latency: 0,
+    successRate: 0,
+    retentionRate: 0,
   },
   context: {
-    requests: 22240,
-    savedTokens: 15147860,
-    spendSaved: 30.3,
-    reduction: 79,
-    latencySaved: 613,
+    requests: 0,
+    savedTokens: 0,
+    spendSaved: 0,
+    reduction: 0,
+    latencySaved: 0,
   },
   admin: {
     workspaceName: "Cosavu",
     region: "us-east-1",
-    securityScore: 100,
+    securityScore: 0,
   },
 }
 
@@ -343,7 +347,7 @@ function readWorkspaceOverview(email?: string | null): WorkspaceOverview {
   )
   const retentionRate =
     retainedQueries.length === 0
-      ? FALLBACK_OVERVIEW.queries.retentionRate
+      ? 0
       : Math.round(
           (retainedQueries.reduce((sum, query) => {
             return (
@@ -357,7 +361,7 @@ function readWorkspaceOverview(email?: string | null): WorkspaceOverview {
   const activeKeys = apiKeys.filter((key) => key.status !== "revoked").length
   const latestIssue =
     apiKeys.length === 0
-      ? FALLBACK_OVERVIEW.api.latestIssue
+      ? "None"
       : formatDateLabel(apiKeys[0]?.created_at || apiKeys[0]?.createdAt)
   const storageBytes =
     sumStoredNumber(buckets, ["sizeBytes", "storageBytes", "totalBytes"]) ||
@@ -370,54 +374,40 @@ function readWorkspaceOverview(email?: string | null): WorkspaceOverview {
 
   return {
     api: {
-      activeKeys: activeKeys || FALLBACK_OVERVIEW.api.activeKeys,
+      activeKeys,
       latestIssue,
     },
     billing: {
-      usagePercent: 30,
-      currentBill: Math.max(
-        FALLBACK_OVERVIEW.billing.currentBill,
-        deriveContextOverview(contextRuns).spendSaved + 18.06
-      ),
-      paidInvoices: FALLBACK_OVERVIEW.billing.paidInvoices,
+      usagePercent: 0,
+      currentBill: deriveContextOverview(contextRuns).spendSaved,
+      paidInvoices: 0,
     },
     buckets: {
-      total: buckets.length || FALLBACK_OVERVIEW.buckets.total,
-      files: bucketFiles.length || FALLBACK_OVERVIEW.buckets.files,
-      storageBytes: storageBytes || FALLBACK_OVERVIEW.buckets.storageBytes,
+      total: buckets.length,
+      files: bucketFiles.length,
+      storageBytes,
     },
     warehouse: {
-      connected:
-        warehouses.filter((warehouse) => warehouse.status !== "paused")
-          .length || FALLBACK_OVERVIEW.warehouse.connected,
-      runs: warehouseRuns.length || FALLBACK_OVERVIEW.warehouse.runs,
-      indexedBytes: indexedBytes || FALLBACK_OVERVIEW.warehouse.indexedBytes,
+      connected: warehouses.filter((warehouse) => warehouse.status !== "paused")
+        .length,
+      runs: warehouseRuns.length,
+      indexedBytes,
     },
     tenants: {
-      active:
-        tenants.filter((tenant) => tenant.status !== "attention").length ||
-        FALLBACK_OVERVIEW.tenants.active,
-      syncing:
-        tenants.filter((tenant) => tenant.status === "syncing").length ||
-        FALLBACK_OVERVIEW.tenants.syncing,
+      active: tenants.filter((tenant) => tenant.status !== "attention").length,
+      syncing: tenants.filter((tenant) => tenant.status === "syncing").length,
     },
     logs: {
-      total: logs.length || FALLBACK_OVERVIEW.logs.total,
-      warnings:
-        logs.filter((log) => log.level === "warning").length ||
-        FALLBACK_OVERVIEW.logs.warnings,
-      errors:
-        logs.filter((log) => log.level === "error").length ||
-        FALLBACK_OVERVIEW.logs.errors,
+      total: logs.length,
+      warnings: logs.filter((log) => log.level === "warning").length,
+      errors: logs.filter((log) => log.level === "error").length,
     },
     queries: {
-      total: queries.length || FALLBACK_OVERVIEW.queries.total,
-      p95Latency:
-        Math.round(percentile(queryLatencies, 95)) ||
-        FALLBACK_OVERVIEW.queries.p95Latency,
+      total: queries.length,
+      p95Latency: Math.round(percentile(queryLatencies, 95)),
       successRate:
         queries.length === 0
-          ? FALLBACK_OVERVIEW.queries.successRate
+          ? 0
           : Math.round((successfulQueries / queries.length) * 100),
       retentionRate,
     },
@@ -436,6 +426,46 @@ function readWorkspaceOverview(email?: string | null): WorkspaceOverview {
   }
 }
 
+function applyConsoleStatsToOverview(
+  overview: WorkspaceOverview,
+  stats: Awaited<ReturnType<typeof fetchConsoleStats>>
+): WorkspaceOverview {
+  return {
+    ...overview,
+    api: {
+      activeKeys: Math.max(overview.api.activeKeys, stats.activeKeys),
+      latestIssue: stats.latestIssue
+        ? formatDateLabel(stats.latestIssue)
+        : overview.api.latestIssue,
+    },
+    billing: {
+      usagePercent: stats.monthlyUsagePercent ?? overview.billing.usagePercent,
+      currentBill: Math.max(overview.billing.currentBill, stats.currentBillUsd),
+      paidInvoices: Math.max(overview.billing.paidInvoices, stats.paidInvoices),
+    },
+    buckets: {
+      ...overview.buckets,
+      total: Math.max(overview.buckets.total, stats.bucketCount),
+      files: Math.max(overview.buckets.files, stats.filesSynced),
+    },
+    warehouse: {
+      ...overview.warehouse,
+      connected: Math.max(
+        overview.warehouse.connected,
+        stats.connectedWarehouses
+      ),
+      runs: Math.max(overview.warehouse.runs, stats.bucketCount),
+    },
+    context: {
+      ...overview.context,
+      requests: stats.requestsUsed ?? overview.context.requests,
+      savedTokens: stats.tokensSaved ?? overview.context.savedTokens,
+      spendSaved: Math.max(overview.context.spendSaved, stats.currentBillUsd),
+      reduction: stats.tokenSavingsPercent ?? overview.context.reduction,
+    },
+  }
+}
+
 export default function Dashboard() {
   const router = useRouter()
   const { theme, setTheme } = useTheme()
@@ -443,7 +473,7 @@ export default function Dashboard() {
   const [mounted, setMounted] = useState(false)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
-  const [user, setUser] = useState<User | null>(null)
+  const [user, setUser] = useState<ConsoleUser | null>(null)
   const [overview, setOverview] = useState<WorkspaceOverview>(FALLBACK_OVERVIEW)
 
   useEffect(() => {
@@ -453,14 +483,28 @@ export default function Dashboard() {
   }, [])
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+    const unsubscribe = watchConsoleAuth(async (currentUser) => {
       if (!currentUser) {
         router.push("/login")
         return
       }
 
       setUser(currentUser)
-      setOverview(readWorkspaceOverview(currentUser.email))
+      const localOverview = readWorkspaceOverview(currentUser.email)
+      setOverview(localOverview)
+
+      try {
+        const liveStats = await fetchConsoleStats()
+        setOverview(
+          applyConsoleStatsToOverview(
+            localOverview,
+            mergeConsoleStats(liveStats, EMPTY_CONSOLE_STATS)
+          )
+        )
+      } catch {
+        setOverview(localOverview)
+      }
+
       setLoading(false)
     })
 
@@ -468,7 +512,7 @@ export default function Dashboard() {
   }, [router])
 
   const savingsTrend = useMemo(() => {
-    const base = Math.max(180000, overview.context.savedTokens / 7)
+    const base = overview.context.savedTokens / 7
     const factors = [0.72, 0.86, 0.78, 1.05, 0.94, 1.18, 1.34]
     const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 

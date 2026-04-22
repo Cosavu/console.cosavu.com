@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
 import { useTheme } from "next-themes"
-import { onAuthStateChanged, type User } from "firebase/auth"
 import {
   BadgeDollarSign,
   BarChart2,
@@ -62,7 +61,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { COSAVU_ENDPOINTS, COSAVU_STAN_API_BASE_URL } from "@/lib/cosavu-api"
-import { auth } from "@/lib/firebase"
+import { watchConsoleAuth, type ConsoleUser } from "@/lib/console-auth"
 
 type ContextTier = "cosavu-small" | "cosavu-medium" | "cosavu-large"
 type ContextStatus = "optimized" | "review" | "failed"
@@ -105,6 +104,12 @@ type ContextRun = {
 
 const LOCAL_CONTEXT_API_STORAGE_PREFIX = "cosavu:context-api"
 const ESTIMATED_CONTEXT_COST_PER_1K_TOKENS = 0.002
+const SEEDED_CONTEXT_RUN_IDS = new Set([
+  "context-stan-prod",
+  "context-query-pack",
+  "context-audit-summary",
+  "context-warehouse-sync",
+])
 
 const BLOCK_LABELS: Record<ContextBlockType, string> = {
   IDENTITY: "Identity",
@@ -129,14 +134,6 @@ const TIER_LABELS: Record<ContextTier, string> = {
 
 function getContextStorageKey(email?: string | null) {
   return `${LOCAL_CONTEXT_API_STORAGE_PREFIX}:${email?.toLowerCase() || "unknown"}`
-}
-
-function makeId(prefix: string) {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    return `${prefix}-${crypto.randomUUID().slice(0, 8)}`
-  }
-
-  return `${prefix}-${Date.now().toString(36)}`
 }
 
 function formatNumber(value: number) {
@@ -198,7 +195,13 @@ function readLocalContextRuns(email?: string | null) {
     if (!Array.isArray(parsedRuns)) return []
 
     return parsedRuns.filter((run): run is ContextRun => {
-      return Boolean(run?.id && run?.timestamp && run?.source && run?.blocks)
+      return Boolean(
+        run?.id &&
+        run?.timestamp &&
+        run?.source &&
+        run?.blocks &&
+        !SEEDED_CONTEXT_RUN_IDS.has(run.id)
+      )
     })
   } catch {
     return []
@@ -217,302 +220,10 @@ function saveLocalContextRuns(
   )
 }
 
-function createContextRun(
-  email: string | null | undefined,
-  overrides: Partial<ContextRun>
-) {
-  const tenant = email?.split("@")[0]?.replace(/[^a-z0-9]+/gi, "-") || "cosavu"
-
-  return {
-    id: overrides.id || makeId("ctx"),
-    timestamp: overrides.timestamp || new Date().toISOString(),
-    tenant: overrides.tenant || tenant.toLowerCase(),
-    source: overrides.source || "PromptOptimizer context pass",
-    route: `POST ${COSAVU_ENDPOINTS.stan.optimize}`,
-    modelTier: overrides.modelTier || "cosavu-small",
-    status: overrides.status || "optimized",
-    requestCount: overrides.requestCount ?? 1,
-    originalTokens: overrides.originalTokens ?? 403,
-    optimizedTokens: overrides.optimizedTokens ?? 77,
-    unoptimizedLatencyMs: overrides.unoptimizedLatencyMs ?? 806,
-    optimizedLatencyMs: overrides.optimizedLatencyMs ?? 272,
-    stanInferenceMs: overrides.stanInferenceMs ?? 8,
-    compressionTarget: overrides.compressionTarget ?? 59.9,
-    messinessScore: overrides.messinessScore ?? 47.3,
-    priority: overrides.priority ?? 80,
-    temperaturePenalty: overrides.temperaturePenalty ?? 12,
-    reasoningBudget: overrides.reasoningBudget ?? 68,
-    notes: overrides.notes || [
-      "STAN-1-Mini produced compression metadata before inference.",
-      "Repeated context was removed while constraints stayed intact.",
-    ],
-    blocks: overrides.blocks || [
-      {
-        blockType: "IDENTITY",
-        originalTokens: 36,
-        optimizedTokens: 24,
-      },
-      {
-        blockType: "CONTEXT",
-        originalTokens: 248,
-        optimizedTokens: 31,
-      },
-      {
-        blockType: "INSTRUCTION",
-        originalTokens: 58,
-        optimizedTokens: 12,
-      },
-      {
-        blockType: "CONSTRAINT",
-        originalTokens: 31,
-        optimizedTokens: 6,
-      },
-      {
-        blockType: "EXAMPLE",
-        originalTokens: 18,
-        optimizedTokens: 3,
-      },
-      {
-        blockType: "OUTPUT_FORMAT",
-        originalTokens: 12,
-        optimizedTokens: 1,
-      },
-    ],
-  } satisfies ContextRun
-}
-
 function createDefaultContextRuns(email?: string | null) {
-  return [
-    createContextRun(email, {
-      id: "context-stan-prod",
-      timestamp: "2026-04-21T09:55:08.000Z",
-      source: "Production prompt compression",
-      requestCount: 12800,
-      originalTokens: 403,
-      optimizedTokens: 77,
-      unoptimizedLatencyMs: 806,
-      optimizedLatencyMs: 272,
-      stanInferenceMs: 8,
-      compressionTarget: 59.9,
-      messinessScore: 47.3,
-      priority: 80,
-      temperaturePenalty: 12,
-      reasoningBudget: 68,
-      notes: [
-        "Backend comparison: 403 original tokens to 77 optimized tokens.",
-        "STAN guidance pushed the reduction to 80.9%.",
-        "Local optimizer latency was 534ms lower after metadata guidance.",
-      ],
-    }),
-    createContextRun(email, {
-      id: "context-query-pack",
-      timestamp: "2026-04-21T09:42:17.000Z",
-      source: "Query context packing",
-      requestCount: 5340,
-      originalTokens: 1460,
-      optimizedTokens: 322,
-      unoptimizedLatencyMs: 1020,
-      optimizedLatencyMs: 396,
-      stanInferenceMs: 10,
-      compressionTarget: 63,
-      messinessScore: 52,
-      priority: 76,
-      temperaturePenalty: 14,
-      reasoningBudget: 72,
-      blocks: [
-        {
-          blockType: "IDENTITY",
-          originalTokens: 84,
-          optimizedTokens: 48,
-        },
-        {
-          blockType: "CONTEXT",
-          originalTokens: 920,
-          optimizedTokens: 164,
-        },
-        {
-          blockType: "INSTRUCTION",
-          originalTokens: 178,
-          optimizedTokens: 48,
-        },
-        {
-          blockType: "CONSTRAINT",
-          originalTokens: 132,
-          optimizedTokens: 31,
-        },
-        {
-          blockType: "EXAMPLE",
-          originalTokens: 86,
-          optimizedTokens: 20,
-        },
-        {
-          blockType: "OUTPUT_FORMAT",
-          originalTokens: 60,
-          optimizedTokens: 11,
-        },
-      ],
-      notes: [
-        "Resource features detected API, S3, SQL, and warehouse context.",
-        "Duplicate connector instructions were collapsed into one policy block.",
-      ],
-    }),
-    createContextRun(email, {
-      id: "context-audit-summary",
-      timestamp: "2026-04-21T09:18:39.000Z",
-      source: "Workspace audit rollup",
-      modelTier: "cosavu-medium",
-      requestCount: 2260,
-      originalTokens: 2210,
-      optimizedTokens: 501,
-      unoptimizedLatencyMs: 1380,
-      optimizedLatencyMs: 548,
-      stanInferenceMs: 12,
-      compressionTarget: 61,
-      messinessScore: 58,
-      priority: 82,
-      temperaturePenalty: 16,
-      reasoningBudget: 78,
-      blocks: [
-        {
-          blockType: "IDENTITY",
-          originalTokens: 112,
-          optimizedTokens: 74,
-        },
-        {
-          blockType: "CONTEXT",
-          originalTokens: 1480,
-          optimizedTokens: 283,
-        },
-        {
-          blockType: "INSTRUCTION",
-          originalTokens: 266,
-          optimizedTokens: 62,
-        },
-        {
-          blockType: "CONSTRAINT",
-          originalTokens: 174,
-          optimizedTokens: 45,
-        },
-        {
-          blockType: "EXAMPLE",
-          originalTokens: 98,
-          optimizedTokens: 25,
-        },
-        {
-          blockType: "OUTPUT_FORMAT",
-          originalTokens: 80,
-          optimizedTokens: 12,
-        },
-      ],
-      notes: [
-        "Audit summaries were compacted before workspace rollup.",
-        "Priority stayed high because the result feeds reliability review.",
-      ],
-    }),
-    createContextRun(email, {
-      id: "context-warehouse-sync",
-      timestamp: "2026-04-21T08:58:10.000Z",
-      source: "Warehouse sync context",
-      modelTier: "cosavu-small",
-      status: "review",
-      requestCount: 1840,
-      originalTokens: 1886,
-      optimizedTokens: 428,
-      unoptimizedLatencyMs: 1190,
-      optimizedLatencyMs: 472,
-      stanInferenceMs: 11,
-      compressionTarget: 57,
-      messinessScore: 61,
-      priority: 74,
-      temperaturePenalty: 15,
-      reasoningBudget: 70,
-      blocks: [
-        {
-          blockType: "IDENTITY",
-          originalTokens: 92,
-          optimizedTokens: 58,
-        },
-        {
-          blockType: "CONTEXT",
-          originalTokens: 1214,
-          optimizedTokens: 246,
-        },
-        {
-          blockType: "INSTRUCTION",
-          originalTokens: 244,
-          optimizedTokens: 56,
-        },
-        {
-          blockType: "CONSTRAINT",
-          originalTokens: 182,
-          optimizedTokens: 39,
-        },
-        {
-          blockType: "EXAMPLE",
-          originalTokens: 86,
-          optimizedTokens: 20,
-        },
-        {
-          blockType: "OUTPUT_FORMAT",
-          originalTokens: 68,
-          optimizedTokens: 9,
-        },
-      ],
-      notes: [
-        "Connector credentials and bucket rules stayed in constraint blocks.",
-        "Large repeated path lists were compressed into a short context digest.",
-      ],
-    }),
-  ] satisfies ContextRun[]
-}
+  void email
 
-function createLiveContextRun(email?: string | null) {
-  return createContextRun(email, {
-    source: "Live ContextAPI optimization",
-    requestCount: 620,
-    originalTokens: 1128,
-    optimizedTokens: 247,
-    unoptimizedLatencyMs: 940,
-    optimizedLatencyMs: 354,
-    stanInferenceMs: 9,
-    compressionTarget: 62,
-    messinessScore: 49,
-    priority: 79,
-    temperaturePenalty: 13,
-    reasoningBudget: 70,
-    blocks: [
-      {
-        blockType: "IDENTITY",
-        originalTokens: 66,
-        optimizedTokens: 41,
-      },
-      {
-        blockType: "CONTEXT",
-        originalTokens: 702,
-        optimizedTokens: 126,
-      },
-      {
-        blockType: "INSTRUCTION",
-        originalTokens: 156,
-        optimizedTokens: 36,
-      },
-      {
-        blockType: "CONSTRAINT",
-        originalTokens: 104,
-        optimizedTokens: 22,
-      },
-      {
-        blockType: "EXAMPLE",
-        originalTokens: 62,
-        optimizedTokens: 15,
-      },
-      {
-        blockType: "OUTPUT_FORMAT",
-        originalTokens: 38,
-        optimizedTokens: 7,
-      },
-    ],
-  })
+  return [] satisfies ContextRun[]
 }
 
 export default function ContextApiPage() {
@@ -523,7 +234,7 @@ export default function ContextApiPage() {
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
   const [copied, setCopied] = useState(false)
-  const [user, setUser] = useState<User | null>(null)
+  const [user, setUser] = useState<ConsoleUser | null>(null)
   const [runs, setRuns] = useState<ContextRun[]>([])
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
   const [search, setSearch] = useState("")
@@ -536,7 +247,7 @@ export default function ContextApiPage() {
   }, [])
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+    const unsubscribe = watchConsoleAuth((currentUser) => {
       if (!currentUser) {
         router.push("/login")
         return
@@ -635,14 +346,10 @@ export default function ContextApiPage() {
     setSyncing(true)
 
     const storedRuns = readLocalContextRuns(user?.email)
-    const nextRuns = [
-      createLiveContextRun(user?.email),
-      ...(storedRuns.length > 0 ? storedRuns : runs),
-    ]
+    const nextRuns = storedRuns.length > 0 ? storedRuns : runs
 
     setRuns(nextRuns)
     setSelectedRunId(nextRuns[0]?.id ?? null)
-    saveLocalContextRuns(user?.email, nextRuns)
 
     window.setTimeout(() => setSyncing(false), 650)
   }
@@ -973,7 +680,7 @@ export default function ContextApiPage() {
                         </div>
                         <p className="font-medium">No ContextAPI runs match</p>
                         <p className="mt-1 max-w-sm text-sm text-muted-foreground">
-                          Change filters or sync a fresh optimization sample.
+                          Change filters or sync live optimization events.
                         </p>
                         <Button
                           className="mt-5 rounded-sm"

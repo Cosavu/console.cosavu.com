@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
 import { useTheme } from "next-themes"
-import { onAuthStateChanged, type User } from "firebase/auth"
 import {
   BarChart2,
   Check,
@@ -62,7 +61,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { COSAVU_DATA_API_BASE_URL, COSAVU_ENDPOINTS } from "@/lib/cosavu-api"
-import { auth } from "@/lib/firebase"
+import { watchConsoleAuth, type ConsoleUser } from "@/lib/console-auth"
 
 type QuerySystem = "car-0" | "car-1"
 type QueryStatus = "success" | "empty" | "error"
@@ -91,6 +90,16 @@ type QueryEvent = {
 }
 
 const LOCAL_QUERY_ANALYTICS_STORAGE_PREFIX = "cosavu:query-analytics"
+const SEEDED_QUERY_EVENT_IDS = new Set([
+  "query-tenant-isolation",
+  "query-car1-policy",
+  "query-product-api",
+  "query-empty-archive",
+  "query-customer-contracts",
+  "query-engine-error",
+  "query-billing-docs",
+  "query-research-engram",
+])
 
 const SYSTEM_LABELS: Record<QuerySystem, string> = {
   "car-0": "CAR-0",
@@ -112,14 +121,6 @@ const TIME_OPTIONS = [
 
 function getAnalyticsStorageKey(email?: string | null) {
   return `${LOCAL_QUERY_ANALYTICS_STORAGE_PREFIX}:${email?.toLowerCase() || "unknown"}`
-}
-
-function makeId(prefix: string) {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    return `${prefix}-${crypto.randomUUID().slice(0, 8)}`
-  }
-
-  return `${prefix}-${Date.now().toString(36)}`
 }
 
 function formatNumber(value: number) {
@@ -159,7 +160,12 @@ function readLocalQueryEvents(email?: string | null) {
     if (!Array.isArray(parsedEvents)) return []
 
     return parsedEvents.filter((event): event is QueryEvent => {
-      return Boolean(event?.id && event?.timestamp && event?.query)
+      return Boolean(
+        event?.id &&
+        event?.timestamp &&
+        event?.query &&
+        !SEEDED_QUERY_EVENT_IDS.has(event.id)
+      )
     })
   } catch {
     return []
@@ -187,174 +193,10 @@ function percentile(values: number[], percentileValue: number) {
   return sortedValues[Math.max(0, Math.min(sortedValues.length - 1, index))]
 }
 
-function createQueryEvent(
-  email: string | null | undefined,
-  overrides: Partial<QueryEvent>
-) {
-  const tenant = email?.split("@")[0]?.replace(/[^a-z0-9]+/gi, "-") || "cosavu"
-  const timestamp = overrides.timestamp || new Date().toISOString()
-  const dbLatencyMs = overrides.dbLatencyMs ?? 34
-  const car1LatencyMs = overrides.car1LatencyMs ?? 12
-
-  return {
-    id: overrides.id || makeId("query"),
-    timestamp,
-    tenant: overrides.tenant || tenant.toLowerCase(),
-    actor: overrides.actor || email || "workspace@cosavu.com",
-    apiKey: overrides.apiKey || "csvu_prod_7e3f",
-    requestId: overrides.requestId || makeId("req"),
-    route: `POST ${COSAVU_ENDPOINTS.data.query}`,
-    query: overrides.query || "How does Cosavu isolate tenant documents?",
-    system: overrides.system || "car-0",
-    collection: overrides.collection || "tenant-docs",
-    topK: overrides.topK ?? 5,
-    cosavuCandidates: overrides.cosavuCandidates ?? 20,
-    car1Threshold: overrides.car1Threshold ?? 0.5,
-    candidateCount: overrides.candidateCount ?? 20,
-    retainedCount: overrides.retainedCount ?? 12,
-    returnedCount: overrides.returnedCount ?? 5,
-    dbLatencyMs,
-    car1LatencyMs,
-    totalMs: overrides.totalMs ?? dbLatencyMs + car1LatencyMs,
-    status: overrides.status || "success",
-  } satisfies QueryEvent
-}
-
 function createDefaultQueryEvents(email?: string | null) {
-  return [
-    createQueryEvent(email, {
-      id: "query-tenant-isolation",
-      timestamp: "2026-04-21T09:52:22.000Z",
-      query: "How does Cosavu keep customer files isolated?",
-      system: "car-0",
-      collection: "tenant-docs",
-      cosavuCandidates: 20,
-      candidateCount: 20,
-      retainedCount: 14,
-      returnedCount: 5,
-      dbLatencyMs: 28,
-      car1LatencyMs: 9,
-      totalMs: 37,
-    }),
-    createQueryEvent(email, {
-      id: "query-car1-policy",
-      timestamp: "2026-04-21T09:49:10.000Z",
-      query: "Which policy mentions warehouse credential rotation?",
-      system: "car-1",
-      collection: "security-policy",
-      cosavuCandidates: 24,
-      candidateCount: 24,
-      retainedCount: 11,
-      returnedCount: 5,
-      dbLatencyMs: 46,
-      car1LatencyMs: 14,
-      totalMs: 60,
-    }),
-    createQueryEvent(email, {
-      id: "query-product-api",
-      timestamp: "2026-04-21T09:44:31.000Z",
-      query: "Show the upload API flow for raw files",
-      system: "car-0",
-      collection: "product-handbook",
-      cosavuCandidates: 18,
-      candidateCount: 18,
-      retainedCount: 10,
-      returnedCount: 5,
-      dbLatencyMs: 31,
-      car1LatencyMs: 11,
-      totalMs: 42,
-    }),
-    createQueryEvent(email, {
-      id: "query-empty-archive",
-      timestamp: "2026-04-21T09:36:03.000Z",
-      query: "Find all archived parity test artifacts",
-      system: "car-0",
-      collection: "archive-dropbox",
-      cosavuCandidates: 20,
-      candidateCount: 3,
-      retainedCount: 0,
-      returnedCount: 0,
-      dbLatencyMs: 24,
-      car1LatencyMs: 3,
-      totalMs: 27,
-      status: "empty",
-    }),
-    createQueryEvent(email, {
-      id: "query-customer-contracts",
-      timestamp: "2026-04-21T09:21:55.000Z",
-      query: "Summarize renewal terms from customer contracts",
-      system: "car-1",
-      collection: "customer-contracts",
-      cosavuCandidates: 32,
-      candidateCount: 32,
-      retainedCount: 19,
-      returnedCount: 8,
-      topK: 8,
-      car1Threshold: 0.45,
-      dbLatencyMs: 55,
-      car1LatencyMs: 18,
-      totalMs: 73,
-    }),
-    createQueryEvent(email, {
-      id: "query-engine-error",
-      timestamp: "2026-04-21T08:58:39.000Z",
-      query: "Search the missing legacy collection",
-      system: "car-0",
-      collection: "legacy-imports",
-      cosavuCandidates: 20,
-      candidateCount: 0,
-      retainedCount: 0,
-      returnedCount: 0,
-      dbLatencyMs: 88,
-      car1LatencyMs: 0,
-      totalMs: 88,
-      status: "error",
-    }),
-    createQueryEvent(email, {
-      id: "query-billing-docs",
-      timestamp: "2026-04-21T08:45:18.000Z",
-      query: "What does the invoice payout threshold do?",
-      system: "car-0",
-      collection: "billing-docs",
-      cosavuCandidates: 16,
-      candidateCount: 16,
-      retainedCount: 9,
-      returnedCount: 5,
-      dbLatencyMs: 29,
-      car1LatencyMs: 8,
-      totalMs: 37,
-    }),
-    createQueryEvent(email, {
-      id: "query-research-engram",
-      timestamp: "2026-04-21T08:33:40.000Z",
-      query: "Compare CAR-1 engram results against direct vector search",
-      system: "car-1",
-      collection: "research-exports",
-      cosavuCandidates: 28,
-      candidateCount: 28,
-      retainedCount: 16,
-      returnedCount: 6,
-      topK: 6,
-      car1Threshold: 0.5,
-      dbLatencyMs: 51,
-      car1LatencyMs: 16,
-      totalMs: 67,
-    }),
-  ] satisfies QueryEvent[]
-}
+  void email
 
-function createLiveQueryEvent(email?: string | null) {
-  return createQueryEvent(email, {
-    query: "What changed in the latest warehouse sync?",
-    system: "car-0",
-    collection: "warehouse-sync",
-    candidateCount: 20,
-    retainedCount: 13,
-    returnedCount: 5,
-    dbLatencyMs: 32,
-    car1LatencyMs: 10,
-    totalMs: 42,
-  })
+  return [] satisfies QueryEvent[]
 }
 
 export default function QueryAnalyticsPage() {
@@ -366,7 +208,7 @@ export default function QueryAnalyticsPage() {
   const [refreshing, setRefreshing] = useState(false)
   const [copied, setCopied] = useState(false)
   const [clockNow, setClockNow] = useState(() => Date.now())
-  const [user, setUser] = useState<User | null>(null)
+  const [user, setUser] = useState<ConsoleUser | null>(null)
   const [events, setEvents] = useState<QueryEvent[]>([])
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null)
   const [querySearch, setQuerySearch] = useState("")
@@ -387,7 +229,7 @@ export default function QueryAnalyticsPage() {
   }, [])
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+    const unsubscribe = watchConsoleAuth((currentUser) => {
       if (!currentUser) {
         router.push("/login")
         return
@@ -571,14 +413,10 @@ export default function QueryAnalyticsPage() {
   const refreshAnalytics = () => {
     setRefreshing(true)
     const storedEvents = readLocalQueryEvents(user?.email)
-    const nextEvents = [
-      createLiveQueryEvent(user?.email),
-      ...(storedEvents.length > 0 ? storedEvents : events),
-    ]
+    const nextEvents = storedEvents.length > 0 ? storedEvents : events
 
     setEvents(nextEvents)
     setSelectedEventId(nextEvents[0]?.id ?? null)
-    saveLocalQueryEvents(user?.email, nextEvents)
 
     window.setTimeout(() => setRefreshing(false), 650)
   }
@@ -954,7 +792,7 @@ export default function QueryAnalyticsPage() {
                         <p className="font-medium">No query traffic matches</p>
                         <p className="mt-1 max-w-sm text-sm text-muted-foreground">
                           Change filters or refresh analytics to append a live
-                          sample.
+                          event.
                         </p>
                         <Button
                           className="mt-5 rounded-sm"
