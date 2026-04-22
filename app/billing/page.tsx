@@ -198,14 +198,6 @@ function readLocalApiKeys(email?: string | null) {
   }
 }
 
-function formatCurrency(value: number) {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: 0,
-  }).format(value)
-}
-
 function formatDate(value?: string | null) {
   if (!value) return "None"
   return new Intl.DateTimeFormat(undefined, {
@@ -811,15 +803,6 @@ export default function BillingPage() {
                       </p>
                     </div>
                   </div>
-
-                  <div className="rounded-sm bg-muted/30 p-4">
-                    <p className="text-sm text-muted-foreground">
-                      Estimated cycle spend
-                    </p>
-                    <p className="mt-2 text-2xl font-semibold">
-                      {formatCurrency(estimatedSpend)}
-                    </p>
-                  </div>
                 </CardContent>
               </Card>
             </div>
@@ -880,8 +863,7 @@ export default function BillingPage() {
                 <SheetHeader>
                   <SheetTitle>Checkout Bill</SheetTitle>
                   <SheetDescription>
-                    Pay the current billed amount using your active payment
-                    method.
+                    Pay metered usage using your active payment method.
                   </SheetDescription>
                 </SheetHeader>
 
@@ -978,7 +960,7 @@ export default function BillingPage() {
 
                 <div className="space-y-2 text-center">
                   <p className="text-2xl font-semibold tracking-tight">
-                    Scan to pay your bill
+                    Scan to pay
                   </p>
                   <p className="text-sm text-muted-foreground">
                     Open your UPI app and scan this code to pay{" "}
