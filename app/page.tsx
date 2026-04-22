@@ -615,8 +615,8 @@ export default function Dashboard() {
         title: "Billing",
         href: "/billing",
         icon: CreditCard,
-        metric: formatCurrency(overview.billing.currentBill),
-        label: `${overview.billing.usagePercent}% usage`,
+        metric: `${overview.billing.usagePercent}%`,
+        label: "metered usage",
         progress: overview.billing.usagePercent,
       },
       {
@@ -769,7 +769,7 @@ export default function Dashboard() {
                 </CardAction>
               </CardHeader>
               <CardContent>
-                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                   <div className="rounded-sm bg-muted/30 p-4">
                     <div className="mb-3 flex items-center justify-between">
                       <span className="text-sm text-muted-foreground">
@@ -815,17 +815,6 @@ export default function Dashboard() {
                         overview.buckets.storageBytes +
                           overview.warehouse.indexedBytes
                       )}
-                    </p>
-                  </div>
-                  <div className="rounded-sm bg-muted/30 p-4">
-                    <div className="mb-3 flex items-center justify-between">
-                      <span className="text-sm text-muted-foreground">
-                        Current bill
-                      </span>
-                      <CreditCard className="size-4 text-muted-foreground" />
-                    </div>
-                    <p className="text-2xl font-semibold">
-                      {formatCurrency(overview.billing.currentBill)}
                     </p>
                   </div>
                 </div>
