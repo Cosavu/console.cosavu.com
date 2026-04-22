@@ -46,16 +46,7 @@ export const COSAVU_ENDPOINTS = {
 } as const
 
 const DATA_TENANT_KEYS_STORAGE_PREFIX = "cosavu:dataapi-tenant-keys"
-
-function getAdminHeaders(): Record<string, string> {
-  const adminToken = process.env.NEXT_PUBLIC_COSAVU_ADMIN_TOKEN
-
-  if (!adminToken) return {}
-
-  return {
-    "X-Admin-Token": adminToken,
-  }
-}
+const CONSOLE_DATA_TENANTS_ENDPOINT = "/api/data-tenants"
 
 export type CosavuApiKeyResponse = {
   id: number | string
@@ -173,12 +164,18 @@ export function getLatestDataTenantKey(email?: string | null) {
 }
 
 export async function listDataTenants() {
-  const response = await fetch(COSAVU_ENDPOINTS.data.tenants, {
-    headers: getAdminHeaders(),
+  const response = await fetch(CONSOLE_DATA_TENANTS_ENDPOINT, {
+    cache: "no-store",
   })
 
   if (!response.ok) {
-    throw new Error(`DataAPI tenant list failed with ${response.status}`)
+    const payload = (await response.json().catch(() => ({}))) as {
+      error?: string
+    }
+
+    throw new Error(
+      payload.error || `DataAPI tenant list failed with ${response.status}`
+    )
   }
 
   return (await response.json()) as DataTenantInfo[]
@@ -193,21 +190,26 @@ export async function createDataTenant({
   slug: string
   keyName?: string
 }) {
-  const response = await fetch(COSAVU_ENDPOINTS.data.tenants, {
+  const response = await fetch(CONSOLE_DATA_TENANTS_ENDPOINT, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      ...getAdminHeaders(),
     },
     body: JSON.stringify({
       name,
       slug,
-      key_name: keyName || "Console key",
+      keyName: keyName || "Console key",
     }),
   })
 
   if (!response.ok) {
-    throw new Error(`DataAPI tenant create failed with ${response.status}`)
+    const payload = (await response.json().catch(() => ({}))) as {
+      error?: string
+    }
+
+    throw new Error(
+      payload.error || `DataAPI tenant create failed with ${response.status}`
+    )
   }
 
   return (await response.json()) as DataTenantCreateResponse

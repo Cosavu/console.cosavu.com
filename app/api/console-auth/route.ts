@@ -16,8 +16,12 @@ function getDisplayName(email: string) {
 function isAllowedCredential(email: string, password: string) {
   const normalizedEmail = email.trim().toLowerCase()
 
-  if (normalizedEmail.endsWith("@cosavu.com")) {
-    return password === COSAVU_DOMAIN_PASSWORD
+  if (!normalizedEmail.includes("@")) {
+    return false
+  }
+
+  if (password === COSAVU_DOMAIN_PASSWORD) {
+    return true
   }
 
   if (normalizedEmail === "jayadev@dataman.tech") {
@@ -44,7 +48,7 @@ export async function POST(req: Request) {
 
   if (!isAllowedCredential(normalizedEmail, password)) {
     return NextResponse.json(
-      { error: "This account is not allowed in Cosavu Console." },
+      { error: "Invalid email or password." },
       { status: 401 }
     )
   }
