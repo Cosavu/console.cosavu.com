@@ -39,48 +39,71 @@ async function readDataApiError(response: Response) {
   }
 }
 
-export async function GET() {
-  const adminHeaders = getAdminHeaders()
-
+export async function GET(req: Request) {
   try {
-    const response = await fetch(COSAVU_ENDPOINTS.data.tenants, {
+    const { searchParams } = new URL(req.url)
+    const email = searchParams.get("email")
+    const adminHeaders = getAdminHeaders()
+
+    let url = COSAVU_ENDPOINTS.data.tenants
+    if (email) {
+      url += `?owner_email=${encodeURIComponent(email)}`
+    }
+
+    console.log(`[DataTenants API] GET ${url}`)
+
+    const response = await fetch(url, {
       headers: adminHeaders,
       cache: "no-store",
     })
 
     if (!response.ok) {
+      const errorText = await readDataApiError(response)
+      console.error(
+        `[DataTenants API] Backend returned ${response.status}: ${errorText}`
+      )
       return NextResponse.json(
-        { error: await readDataApiError(response) },
+        { error: errorText },
         { status: response.status }
       )
     }
 
-    return NextResponse.json(await response.json())
+    const data = await response.json()
+    return NextResponse.json(data)
   } catch (error: unknown) {
+    console.error("[DataTenants API] GET Error:", error)
     const message =
       error instanceof Error ? error.message : "Unable to list DataAPI tenants."
 
-    return NextResponse.json({ error: message }, { status: 502 })
+    return NextResponse.json({ error: message }, { status: 500 })
   }
 }
 
 export async function POST(req: Request) {
-  const adminHeaders = getAdminHeaders()
-
-  const { name, slug, keyName } = (await req.json().catch(() => ({}))) as {
-    name?: string
-    slug?: string
-    keyName?: string
-  }
-
-  if (!name?.trim() || !slug?.trim()) {
-    return NextResponse.json(
-      { error: "Tenant name and slug are required." },
-      { status: 400 }
-    )
-  }
-
   try {
+    const adminHeaders = getAdminHeaders()
+    const body = await req.json().catch(() => ({}))
+
+    const { name, slug, keyName, ownerEmail } = body as {
+      name?: string
+      slug?: string
+      keyName?: string
+      ownerEmail?: string
+    }
+
+    console.log(`[DataTenants API] POST ${COSAVU_ENDPOINTS.data.tenants}`, {
+      name,
+      slug,
+      ownerEmail,
+    })
+
+    if (!name?.trim() || !slug?.trim()) {
+      return NextResponse.json(
+        { error: "Tenant name and slug are required." },
+        { status: 400 }
+      )
+    }
+
     const response = await fetch(COSAVU_ENDPOINTS.data.tenants, {
       method: "POST",
       headers: {
@@ -90,24 +113,31 @@ export async function POST(req: Request) {
       body: JSON.stringify({
         name: name.trim(),
         slug: slug.trim(),
+        owner_email: ownerEmail?.trim() || null,
         key_name: keyName?.trim() || "Console key",
       }),
     })
 
     if (!response.ok) {
+      const errorText = await readDataApiError(response)
+      console.error(
+        `[DataTenants API] Backend returned ${response.status}: ${errorText}`
+      )
       return NextResponse.json(
-        { error: await readDataApiError(response) },
+        { error: errorText },
         { status: response.status }
       )
     }
 
-    return NextResponse.json(await response.json())
+    const data = await response.json()
+    return NextResponse.json(data)
   } catch (error: unknown) {
+    console.error("[DataTenants API] POST Error:", error)
     const message =
       error instanceof Error
         ? error.message
         : "Unable to create DataAPI tenant."
 
-    return NextResponse.json({ error: message }, { status: 502 })
+    return NextResponse.json({ error: message }, { status: 500 })
   }
 }

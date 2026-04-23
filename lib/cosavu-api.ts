@@ -1,7 +1,10 @@
 export type CosavuApiSurface = "stan" | "data"
 
 const DEFAULT_STAN_API_BASE_URL = "https://api.cosavu.com"
-const DEFAULT_DATA_API_BASE_URL = "https://dataapi.cosavu.com"
+const DEFAULT_DATA_API_BASE_URL =
+  process.env.NODE_ENV === "development"
+    ? "http://127.0.0.1:8000"
+    : "https://dataapi.cosavu.com"
 
 function normalizeBaseUrl(value: string) {
   return value.replace(/\/+$/, "")
@@ -47,6 +50,8 @@ export const COSAVU_ENDPOINTS = {
 
 const DATA_TENANT_KEYS_STORAGE_PREFIX = "cosavu:dataapi-tenant-keys"
 const CONSOLE_DATA_TENANTS_ENDPOINT = "/api/data-tenants"
+const DATA_TENANT_FALLBACK_STATUSES = new Set([404, 500, 502, 503, 504])
+const MAX_CREATE_ATTEMPTS = 8
 
 export type CosavuApiKeyResponse = {
   id: number | string
@@ -60,6 +65,7 @@ export type DataTenantInfo = {
   id: string
   name: string
   slug: string
+  owner_email?: string | null
   created_at: string
 }
 
@@ -88,6 +94,57 @@ export type DataFileUploadResponse = {
   id: string
   filename: string
   chunks_indexed: number
+}
+
+async function readCosavuApiError(response: Response) {
+  const fallback = `Cosavu request failed with ${response.status}`
+
+  try {
+    const payload = (await response.json()) as {
+      error?: string
+      detail?: string
+      message?: string
+    }
+
+    return payload.error || payload.detail || payload.message || fallback
+  } catch {
+    return fallback
+  }
+}
+
+function isNameConflict(message: string) {
+  const normalized = message.toLowerCase()
+
+  return (
+    normalized.includes("409") ||
+    normalized.includes("already exists") ||
+    normalized.includes("already in use") ||
+    normalized.includes("unique constraint")
+  )
+}
+
+function withUniqueSuffix(value: string, attempt: number) {
+  if (attempt === 0) return value
+
+  const suffix =
+    attempt === 1
+      ? Date.now().toString(36).slice(-6)
+      : `${Date.now().toString(36).slice(-4)}${Math.random()
+          .toString(36)
+          .slice(2, 6)}`
+  const maxBaseLength = Math.max(8, 50 - suffix.length - 1)
+
+  return `${value.slice(0, maxBaseLength).replace(/-+$/g, "")}-${suffix}`
+}
+
+function getPublicDataAdminHeaders(): Record<string, string> {
+  const adminToken = process.env.NEXT_PUBLIC_COSAVU_ADMIN_TOKEN
+
+  if (!adminToken) return {}
+
+  return {
+    "X-Admin-Token": adminToken,
+  }
 }
 
 export async function createCosavuApiKey({
@@ -163,19 +220,28 @@ export function getLatestDataTenantKey(email?: string | null) {
   return readLocalDataTenantKeys(email)[0] || null
 }
 
-export async function listDataTenants() {
-  const response = await fetch(CONSOLE_DATA_TENANTS_ENDPOINT, {
+export async function listDataTenants(email?: string | null) {
+  let url = CONSOLE_DATA_TENANTS_ENDPOINT
+  if (email) {
+    url += `?email=${encodeURIComponent(email)}`
+  }
+  let response = await fetch(url, {
     cache: "no-store",
   })
 
-  if (!response.ok) {
-    const payload = (await response.json().catch(() => ({}))) as {
-      error?: string
+  if (DATA_TENANT_FALLBACK_STATUSES.has(response.status)) {
+    let fallbackUrl = COSAVU_ENDPOINTS.data.tenants
+    if (email) {
+      fallbackUrl += `?owner_email=${encodeURIComponent(email)}`
     }
+    response = await fetch(fallbackUrl, {
+      headers: getPublicDataAdminHeaders(),
+      cache: "no-store",
+    })
+  }
 
-    throw new Error(
-      payload.error || `DataAPI tenant list failed with ${response.status}`
-    )
+  if (!response.ok) {
+    throw new Error(await readCosavuApiError(response))
   }
 
   return (await response.json()) as DataTenantInfo[]
@@ -185,34 +251,61 @@ export async function createDataTenant({
   name,
   slug,
   keyName,
+  ownerEmail,
 }: {
   name: string
   slug: string
   keyName?: string
+  ownerEmail?: string | null
 }) {
-  const response = await fetch(CONSOLE_DATA_TENANTS_ENDPOINT, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      name,
-      slug,
-      keyName: keyName || "Console key",
-    }),
-  })
+  let lastError = "Could not create DataAPI tenant."
 
-  if (!response.ok) {
-    const payload = (await response.json().catch(() => ({}))) as {
-      error?: string
+  for (let attempt = 0; attempt < MAX_CREATE_ATTEMPTS; attempt++) {
+    const candidateSlug = withUniqueSuffix(slug, attempt)
+    const tenantPayload = {
+      name,
+      slug: candidateSlug,
+      ownerEmail: ownerEmail || null,
+      keyName: keyName || "Console key",
+    }
+    const dataApiPayload = {
+      name,
+      slug: candidateSlug,
+      owner_email: ownerEmail || null,
+      key_name: keyName || "Console key",
+    }
+    let response = await fetch(CONSOLE_DATA_TENANTS_ENDPOINT, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(tenantPayload),
+    })
+
+    if (DATA_TENANT_FALLBACK_STATUSES.has(response.status)) {
+      response = await fetch(COSAVU_ENDPOINTS.data.tenants, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...getPublicDataAdminHeaders(),
+        },
+        body: JSON.stringify(dataApiPayload),
+      })
     }
 
-    throw new Error(
-      payload.error || `DataAPI tenant create failed with ${response.status}`
-    )
+    if (response.ok) {
+      return (await response.json()) as DataTenantCreateResponse
+    }
+
+    lastError = await readCosavuApiError(response)
+    if (!isNameConflict(lastError)) {
+      throw new Error(lastError)
+    }
   }
 
-  return (await response.json()) as DataTenantCreateResponse
+  throw new Error(
+    `${lastError} Tried ${MAX_CREATE_ATTEMPTS} unique tenant slugs.`
+  )
 }
 
 export async function createDataBucket({
@@ -224,20 +317,32 @@ export async function createDataBucket({
   name: string
   system: string
 }) {
-  const response = await fetch(COSAVU_ENDPOINTS.data.buckets, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-API-Key": apiKey,
-    },
-    body: JSON.stringify({ name, system }),
-  })
+  let lastError = "Could not create DataAPI bucket."
 
-  if (!response.ok) {
-    throw new Error(`DataAPI bucket create failed with ${response.status}`)
+  for (let attempt = 0; attempt < MAX_CREATE_ATTEMPTS; attempt++) {
+    const candidateName = withUniqueSuffix(name, attempt)
+    const response = await fetch(COSAVU_ENDPOINTS.data.buckets, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-API-Key": apiKey,
+      },
+      body: JSON.stringify({ name: candidateName, system }),
+    })
+
+    if (response.ok) {
+      return (await response.json()) as DataBucketInfo
+    }
+
+    lastError = await readCosavuApiError(response)
+    if (!isNameConflict(lastError)) {
+      throw new Error(lastError)
+    }
   }
 
-  return (await response.json()) as DataBucketInfo
+  throw new Error(
+    `${lastError} Tried ${MAX_CREATE_ATTEMPTS} unique bucket names.`
+  )
 }
 
 export async function listDataBuckets(apiKey: string) {
@@ -248,7 +353,7 @@ export async function listDataBuckets(apiKey: string) {
   })
 
   if (!response.ok) {
-    throw new Error(`DataAPI bucket list failed with ${response.status}`)
+    throw new Error(await readCosavuApiError(response))
   }
 
   return (await response.json()) as DataBucketInfo[]
@@ -282,7 +387,7 @@ export async function uploadDataFile({
   })
 
   if (!response.ok) {
-    throw new Error(`DataAPI file upload failed with ${response.status}`)
+    throw new Error(await readCosavuApiError(response))
   }
 
   return (await response.json()) as DataFileUploadResponse

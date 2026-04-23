@@ -265,14 +265,6 @@ function slugify(value: string) {
   return slug || "tenant"
 }
 
-function makeTenantId() {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    return crypto.randomUUID()
-  }
-
-  return `tenant-${Date.now()}`
-}
-
 function getRegionLabel(region: string) {
   return (
     REGION_OPTIONS.find((option) => option.value === region)?.label || region
@@ -412,7 +404,7 @@ export default function TenantsPage() {
     }
 
     try {
-      const realTenants = await listDataTenants()
+      const realTenants = await listDataTenants(user?.email)
       if (realTenants.length > 0) {
         const now = new Date().toISOString()
         const nextTenants: TenantRecord[] = realTenants.map((tenant) => ({
@@ -422,7 +414,10 @@ export default function TenantsPage() {
           status: "active",
           mode: "hybrid",
           region: tenantRegion,
-          ownerEmail: user?.email || "workspace@cosavu.com",
+          ownerEmail:
+            (tenant as any).owner_email ||
+            user?.email ||
+            "workspace@cosavu.com",
           createdAt: tenant.created_at,
           apiKeys: 1,
           warehouses: 0,
@@ -441,10 +436,16 @@ export default function TenantsPage() {
         return
       }
     } catch (error) {
-      console.error("DataAPI tenant sync failed:", error)
-      setErrorMessage(
-        "Could not sync real DataAPI tenants. Showing the last local snapshot."
-      )
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Unable to sync DataAPI tenants"
+
+      if (!/not found/i.test(message)) {
+        setErrorMessage(
+          `Could not sync real DataAPI tenants: ${message}. Showing the last local snapshot.`
+        )
+      }
     } finally {
       setRefreshing(false)
     }
@@ -474,6 +475,7 @@ export default function TenantsPage() {
   }
 
   const handleTenantNameChange = (value: string) => {
+    setErrorMessage(null)
     setTenantName(value)
 
     if (!slugTouched) {
@@ -482,6 +484,7 @@ export default function TenantsPage() {
   }
 
   const handleTenantSlugChange = (value: string) => {
+    setErrorMessage(null)
     setSlugTouched(true)
     setTenantSlug(slugify(value))
   }
@@ -497,59 +500,77 @@ export default function TenantsPage() {
       return
     }
 
-    if (tenants.some((tenant) => tenant.slug === slug)) {
-      setErrorMessage("That tenant slug is already in use.")
-      return
-    }
+    const existingLocalTenant = tenants.find((tenant) => tenant.slug === slug)
 
     setSaving(true)
     setErrorMessage(null)
 
     try {
-      const created = await createDataTenant({
+      const result = await createDataTenant({
         name,
         slug,
         keyName: `${name} console key`,
+        ownerEmail: user?.email,
       })
+
       const now = new Date().toISOString()
-      const createdAt = created.tenant.created_at || now
+      const createdAt =
+        result.tenant.created_at || existingLocalTenant?.createdAt || now
       const nextTenant: TenantRecord = {
-        id: created.tenant.id || makeTenantId(),
-        name: created.tenant.name,
-        slug: created.tenant.slug,
+        id: result.tenant.id,
+        name: result.tenant.name,
+        slug: result.tenant.slug,
         status: connectWarehouse ? "syncing" : "active",
-        mode: tenantMode,
-        region: tenantRegion,
-        ownerEmail: user?.email || "workspace@cosavu.com",
+        mode: existingLocalTenant?.mode || tenantMode,
+        region: existingLocalTenant?.region || tenantRegion,
+        ownerEmail:
+          result.tenant.owner_email ||
+          existingLocalTenant?.ownerEmail ||
+          user?.email ||
+          "workspace@cosavu.com",
         createdAt,
-        apiKeys: 1,
-        warehouses: connectWarehouse || tenantMode !== "upload-api" ? 1 : 0,
-        files: 0,
-        chunks: 0,
+        apiKeys: Math.max(existingLocalTenant?.apiKeys || 0, 1),
+        warehouses:
+          existingLocalTenant?.warehouses ||
+          (connectWarehouse || tenantMode !== "upload-api" ? 1 : 0),
+        files: existingLocalTenant?.files || 0,
+        chunks: existingLocalTenant?.chunks || 0,
         lastActivity: now,
-        defaultSystem,
-        hardIsolation,
+        defaultSystem: existingLocalTenant?.defaultSystem || defaultSystem,
+        hardIsolation: existingLocalTenant?.hardIsolation ?? hardIsolation,
       }
 
       saveLocalDataTenantKey(user?.email, {
-        tenantId: created.tenant.id,
-        tenantName: created.tenant.name,
-        tenantSlug: created.tenant.slug,
-        keyId: created.api_key_id,
-        apiKey: created.api_key,
-        createdAt,
+        tenantId: result.tenant.id,
+        tenantName: result.tenant.name,
+        tenantSlug: result.tenant.slug,
+        keyId: result.api_key_id,
+        apiKey: result.api_key,
+        createdAt: now,
       })
 
-      const nextTenants = [nextTenant, ...tenants]
+      const nextTenants = existingLocalTenant
+        ? tenants.map((tenant) =>
+            tenant.slug === result.tenant.slug ? nextTenant : tenant
+          )
+        : [nextTenant, ...tenants]
       saveLocalTenants(user?.email, nextTenants)
       setTenants(nextTenants)
       setSelectedTenantId(nextTenant.id)
       setCreateSheetOpen(false)
-    } catch (error) {
-      console.error("DataAPI tenant creation failed:", error)
-      setErrorMessage(
-        "Could not create a real DataAPI tenant. Check the DataAPI deployment and admin token."
-      )
+    } catch (error: any) {
+      let message = "Could not create DataAPI tenant."
+
+      if (error instanceof Error) {
+        message = error.message
+      }
+
+      if (message.includes("401") || message.includes("403")) {
+        message =
+          "Authentication failed. Please check your admin token configuration."
+      }
+
+      setErrorMessage(message)
     } finally {
       setSaving(false)
     }
@@ -1090,10 +1111,10 @@ export default function TenantsPage() {
             >
               <form className="flex h-full flex-col" onSubmit={createTenant}>
                 <SheetHeader>
-                  <SheetTitle>Create tenant</SheetTitle>
+                  <SheetTitle>Create new tenant</SheetTitle>
                   <SheetDescription>
-                    Register an enterprise boundary for keys, files, warehouse
-                    syncs, and retrieval settings.
+                    Create a new enterprise boundary for buckets, files,
+                    warehouse syncs, and retrieval settings.
                   </SheetDescription>
                 </SheetHeader>
 

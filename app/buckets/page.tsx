@@ -193,6 +193,10 @@ function slugify(value: string) {
   return slug || "private-bucket"
 }
 
+function getErrorMessage(error: unknown, fallback: string) {
+  return error instanceof Error && error.message ? error.message : fallback
+}
+
 function makeId(prefix: string) {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return `${prefix}-${crypto.randomUUID().slice(0, 8)}`
@@ -599,14 +603,13 @@ export default function BucketsPage() {
       return
     }
 
-    if (uploadFiles.length === 0) {
-      setErrorMessage("Choose at least one file to upload.")
-      return
-    }
-
     const bucketSlug = slugify(name)
     if (
-      buckets.some((bucket) => bucket.name.toLowerCase() === name.toLowerCase())
+      buckets.some(
+        (bucket) =>
+          bucket.name.toLowerCase() === name.toLowerCase() ||
+          slugify(bucket.name) === bucketSlug
+      )
     ) {
       setErrorMessage("A bucket with that name already exists.")
       return
@@ -615,7 +618,7 @@ export default function BucketsPage() {
     const dataTenantKey = getLatestDataTenantKey(user?.email)
     if (!dataTenantKey) {
       setErrorMessage(
-        "Create a real tenant first so DataAPI can issue an X-API-Key for bucket operations."
+        "You need an active DataAPI tenant to create buckets. Please go to the Tenants page and create one first."
       )
       return
     }
@@ -629,22 +632,38 @@ export default function BucketsPage() {
         name: bucketSlug,
         system: newBucketSystem,
       })
-      const uploadedFiles = await Promise.all(
-        uploadFiles.map((file) =>
-          uploadDataFile({
-            apiKey: dataTenantKey.apiKey,
-            file: file.file,
-            system: newBucketSystem,
-            collection: realBucket.name,
-          })
-        )
-      )
+      const actualBucketSlug = realBucket.name
+
+      let uploadError: unknown = null
+      const uploadedFiles =
+        uploadFiles.length > 0
+          ? await Promise.all(
+              uploadFiles.map((file) =>
+                uploadDataFile({
+                  apiKey: dataTenantKey.apiKey,
+                  file: file.file,
+                  system: newBucketSystem,
+                  collection: actualBucketSlug,
+                })
+              )
+            ).catch((error) => {
+              uploadError = error
+              return []
+            })
+          : []
+
+      if (uploadError) {
+        console.error("DataAPI bucket file upload failed:", uploadError)
+      }
 
       const now = new Date().toISOString()
       const tenantSlug = dataTenantKey.tenantSlug || getTenantSlug(user?.email)
       const bucketId = makeId("bucket")
       const bucketSuffix = bucketId.replace("bucket-", "")
-      const totalBytes = uploadFiles.reduce((sum, file) => sum + file.size, 0)
+      const totalBytes = uploadedFiles.reduce(
+        (sum, _file, index) => sum + (uploadFiles[index]?.size || 0),
+        0
+      )
       const chunksIndexed = uploadedFiles.reduce(
         (sum, file) => sum + file.chunks_indexed,
         0
@@ -652,37 +671,41 @@ export default function BucketsPage() {
 
       const createdBucket: BucketRecord = {
         id: bucketId,
-        name,
-        s3Bucket: `cosavu-private-${tenantSlug}-${bucketSlug}-${bucketSuffix}`,
-        s3Prefix: `${tenantSlug}/${bucketSlug}/`,
+        name: actualBucketSlug,
+        s3Bucket: `cosavu-private-${tenantSlug}-${actualBucketSlug}-${bucketSuffix}`,
+        s3Prefix: `${tenantSlug}/${actualBucketSlug}/`,
         region: newBucketRegion,
         system: realBucket.system as BucketSystem,
-        status: "ready",
+        status: uploadError ? "attention" : "ready",
         ownerEmail: user?.email || "workspace@cosavu.com",
         createdAt: now,
         updatedAt: now,
-        fileCount: uploadFiles.length,
+        fileCount: uploadedFiles.length,
         totalBytes,
         chunksIndexed,
         encryption: "SSE-S3",
         retentionDays: Number(newBucketRetention) || 90,
       }
 
-      const createdFiles: BucketFile[] = uploadFiles.map((file, index) => {
-        const uploadedFile = uploadedFiles[index]
+      const createdFiles: BucketFile[] = uploadedFiles.map(
+        (uploadedFile, index) => {
+          const file = uploadFiles[index]
 
-        return {
-          id: uploadedFile.id,
-          bucketId,
-          name: uploadedFile.filename || file.name,
-          size: file.size,
-          type: file.type,
-          s3Key: `${createdBucket.s3Prefix}${uploadedFile.id}/${file.name}`,
-          chunksIndexed: uploadedFile.chunks_indexed,
-          uploadedAt: now,
-          status: "indexed",
+          return {
+            id: uploadedFile.id,
+            bucketId,
+            name: uploadedFile.filename || file?.name || "uploaded-file",
+            size: file?.size || 0,
+            type: file?.type || "application/octet-stream",
+            s3Key: `${createdBucket.s3Prefix}${uploadedFile.id}/${
+              file?.name || uploadedFile.filename || "uploaded-file"
+            }`,
+            chunksIndexed: uploadedFile.chunks_indexed,
+            uploadedAt: now,
+            status: "indexed",
+          }
         }
-      })
+      )
 
       const nextBuckets = [createdBucket, ...buckets]
       const nextFiles = [...createdFiles, ...bucketFiles]
@@ -697,10 +720,21 @@ export default function BucketsPage() {
       if (fileInputRef.current) {
         fileInputRef.current.value = ""
       }
+      if (uploadError) {
+        setErrorMessage(
+          `Bucket was created, but file upload failed: ${getErrorMessage(
+            uploadError,
+            "check the DataAPI file upload endpoint."
+          )}`
+        )
+      }
     } catch (error) {
       console.error("DataAPI bucket upload failed:", error)
       setErrorMessage(
-        "Could not create a real DataAPI bucket or upload files. Check the tenant key and DataAPI deployment."
+        `Could not create a DataAPI bucket: ${getErrorMessage(
+          error,
+          "check the tenant key and DataAPI deployment."
+        )}`
       )
     } finally {
       setUploading(false)
@@ -1215,10 +1249,10 @@ export default function BucketsPage() {
                 onSubmit={createBucketFromUpload}
               >
                 <SheetHeader>
-                  <SheetTitle>Upload files</SheetTitle>
+                  <SheetTitle>Create bucket</SheetTitle>
                   <SheetDescription>
-                    Create a private Cosavu AWS bucket and upload files into its
-                    tenant-isolated S3 prefix through{" "}
+                    Create a private Cosavu AWS bucket. Files are optional and
+                    are uploaded into the tenant-isolated S3 prefix through{" "}
                     {COSAVU_ENDPOINTS.data.filesUpload}.
                   </SheetDescription>
                 </SheetHeader>
@@ -1367,11 +1401,7 @@ export default function BucketsPage() {
                   <Button
                     type="submit"
                     className="rounded-sm"
-                    disabled={
-                      uploading ||
-                      !newBucketName.trim() ||
-                      uploadFiles.length === 0
-                    }
+                    disabled={uploading || !newBucketName.trim()}
                   >
                     {uploading ? (
                       <Loader2 className="size-4 animate-spin" />
