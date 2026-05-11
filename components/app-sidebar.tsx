@@ -215,7 +215,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
               <SidebarMenuButton asChild isActive={isActive("/warehouse")}>
                 <Link href="/warehouse">
                   <Unplug className="mr-2 size-4" />
-                  Warehouse
+                  On-Prem
                 </Link>
               </SidebarMenuButton>
             </SidebarMenuItem>
